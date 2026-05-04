@@ -1,0 +1,7 @@
+{
+  "name": "pcrepp",
+  "dependencies": [
+    "pcre2",
+    "catch2"
+  ]
+}

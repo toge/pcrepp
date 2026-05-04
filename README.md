@@ -1,0 +1,117 @@
+# pcrepp
+
+`pcrepp` は、PCRE2 (Perl Compatible Regular Expressions) を C++ で直感的に扱うためのモダンなヘッダーオンリーラッパーライブラリです。
+
+## 特徴
+
+- **モダンな C++ 設計**: C++20 以上の機能を活用（`std::expected`, `std::ranges`, `std::format` など）。
+- **ヘッダーオンリー**: `pcrepp.hpp` をインクルードするだけで利用可能。
+- **直感的な API**: 名前付きキャプチャグループへのアクセス、イテレータによる全マッチの列挙、ラムダ式を用いた動的置換などをサポート。
+- **高性能**: 必要に応じて PCRE2 の JIT コンパイルをサポート。
+
+## 動作要件
+
+- **C++ コンパイラ**: C++20 以降をサポートするコンパイラ（GCC 11+, Clang 13+, MSVC 19.30+ 推奨）。
+- **依存ライブラリ**: PCRE2 (8-bit 版)。
+
+## インストール方法
+
+### vcpkg を使用する場合
+
+`vcpkg.json` に以下の依存関係を追加してください。
+
+```json
+{
+  "dependencies": [
+    "pcrepp"
+  ]
+}
+```
+
+### CMake プロジェクトへの組み込み
+
+`fetch_content` や `add_subdirectory` でプロジェクトに追加し、`pcrepp::pcrepp` ターゲットをリンクしてください。
+
+```cmake
+find_package(pcrepp CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE pcrepp::pcrepp)
+```
+
+## API リファレンス
+
+### `pcrepp::context<UseJIT>`
+正規表現のコンパイルと検索・置換操作を管理するメインクラスです。
+
+- **`static create(src, option)`**: `std::expected` を返すファクトリメソッド。
+- **`compile(src, option)`**: パターンをコンパイルします。
+- **`search(target, match_result, start, option)`**: 単一のマッチを検索します。
+- **`match(target, match_result, option)`**: 完全一致を判定します。
+- **`replace(target, replacement, option)`**: 文字列による全置換を行います。
+- **`replace(target, callback)`**: ラムダ式を用いた動的置換を行います。
+- **`search_all(target)`**: すべてのマッチを巡回するための Range を返します。
+- **`split(target)`**: 正規表現を区切り文字として文字列を分割します。
+
+### `pcrepp::match_result`
+個別のマッチング結果を保持するクラスです。
+
+- **`get(index / name)`**: 指定したインデックスまたは名前のグループを取得します。
+- **`operator[]`**: `get` のエイリアス。
+- **`size()`**: キャプチャグループの数を返します。
+- **`start_pos() / end_pos()`**: マッチした箇所の開始/終了位置を返します。
+- **`begin() / end()`**: キャプチャグループを巡回するためのイテレータを返します。
+- **`operator bool()`**: マッチに成功したかどうかを判定します。
+
+## 使い方
+
+```cpp
+#include <iostream>
+#include <format>
+#include <string_view>
+#include "pcrepp.hpp"
+
+auto main() -> int {
+  using namespace std::string_view_literals;
+
+  // 1. 正規表現のコンパイル
+  auto ctx_res = pcrepp::context<>::create(R"((?<name>\w+):\s*(?<value>\d+))");
+  if (not ctx_res) {
+    std::cerr << "Compile error: " << ctx_res.error() << "\n";
+    return 1;
+  }
+  auto const& ctx = *ctx_res;
+
+  auto const target = "Apple: 100, Banana: 200"sv;
+
+  // 2. 検索とマッチ結果の取得
+  std::cout << "--- match_result features ---\n";
+  for (auto const& res : ctx.search_all(target)) {
+    if (not res) continue;
+
+    std::cout << "Match: " << res[0] << "\n"; // インデックスアクセス
+    std::cout << "  Name:  " << res["name"] << "\n"; // 名前によるアクセス
+    std::cout << "  Value: " << res["value"] << "\n";
+
+    std::cout << "  All groups: ";
+    for (auto const& group : res) {
+      std::cout << "\"" << group << "\" ";
+    }
+    std::cout << "\n";
+    std::cout << std::format("  Formatted: {}\n", res); // std::format 対応
+  }
+
+  // 3. ラムダ式を用いた動的置換
+  std::cout << "\n--- Dynamic Replacement (Lambda) ---\n";
+  auto dynamic_res = ctx.replace(target, [](auto const& res) {
+    auto value = std::stoi(std::string(res["value"]));
+    return std::format("{}({} USD)", res["name"], value / 100);
+  });
+  std::cout << "Original: " << target << "\n";
+  std::cout << "Replaced: " << dynamic_res << "\n";
+
+  return 0;
+}
+```
+
+## ライセンス
+
+このプロジェクトは [MIT ライセンス](LICENSE) の下で公開されています。
