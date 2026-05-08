@@ -44,17 +44,18 @@ target_link_libraries(your_target PRIVATE pcrepp::pcrepp)
 
 - **`static create(src, option)`**: `std::expected` を返すファクトリメソッド。
 - **`compile(src, option)`**: パターンをコンパイルします。
-- **`search(target, match_result, start, option)`**: 単一のマッチを検索します。
+- **`find(target, match_result, start, option)`**: 単一のマッチを検索し、既存の `match_result` に書き込みます。
+- **`find(target, start, option)`**: 単一のマッチを検索し、`match_result` を戻り値で返します。
 - **`match(target, match_result, option)`**: 完全一致を判定します。
 - **`replace(target, replacement, option)`**: 文字列による全置換を行います。
 - **`replace(target, callback)`**: ラムダ式を用いた動的置換を行います。
-- **`search_all(target)`**: すべてのマッチを巡回するための Range を返します。
+- **`find_all(target)`**: すべてのマッチを巡回するための Range を返します。
 - **`split(target)`**: 正規表現を区切り文字として文字列を分割します。
 
 ### `pcrepp::match_result`
 個別のマッチング結果を保持するクラスです。
 
-- **`get(index / name)`**: 指定したインデックスまたは名前のグループを取得します。
+- **`get<T = std::string_view>(index / name)`**: 指定したインデックスまたは名前のグループを取得します。`T` には `std::string_view`、`std::string`、`float`、`double`、各種整数型を指定でき、未対応型はコンパイルエラーになります。数値変換に失敗した場合はその型のデフォルト値を返します。
 - **`operator[]`**: `get` のエイリアス。
 - **`size()`**: キャプチャグループの数を返します。
 - **`start_pos() / end_pos()`**: マッチした箇所の開始/終了位置を返します。
@@ -84,12 +85,12 @@ auto main() -> int {
 
   // 2. 検索とマッチ結果の取得
   std::cout << "--- match_result features ---\n";
-  for (auto const& res : ctx.search_all(target)) {
+  for (auto const& res : ctx.find_all(target)) {
     if (not res) continue;
 
     std::cout << "Match: " << res[0] << "\n"; // インデックスアクセス
     std::cout << "  Name:  " << res["name"] << "\n"; // 名前によるアクセス
-    std::cout << "  Value: " << res["value"] << "\n";
+    std::cout << "  Value: " << res.get<int>("value") << "\n"; // 型変換付きアクセス
 
     std::cout << "  All groups: ";
     for (auto const& group : res) {
@@ -99,10 +100,15 @@ auto main() -> int {
     std::cout << std::format("  Formatted: {}\n", res); // std::format 対応
   }
 
+  auto first_res = ctx.find(target);
+  if (first_res && *first_res) {
+    std::cout << "\nFirst match via return value: " << (*first_res)["name"] << "\n";
+  }
+
   // 3. ラムダ式を用いた動的置換
   std::cout << "\n--- Dynamic Replacement (Lambda) ---\n";
   auto dynamic_res = ctx.replace(target, [](auto const& res) {
-    auto value = std::stoi(std::string(res["value"]));
+    auto value = res.get<int>("value");
     return std::format("{}({} USD)", res["name"], value / 100);
   });
   std::cout << "Original: " << target << "\n";

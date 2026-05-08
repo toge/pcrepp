@@ -11,7 +11,7 @@ TEST_CASE("Basic usage from user example", "[basic]") {
         auto const& ctx = *ctx_res;
 
         auto const target = "Apple: 100, Banana: 200"sv;
-        auto results = ctx.search_all(target);
+        auto results = ctx.find_all(target);
         auto it = results.begin();
 
         REQUIRE(it != results.end());
@@ -29,6 +29,31 @@ TEST_CASE("Basic usage from user example", "[basic]") {
 
         ++it;
         CHECK(it == results.end());
+    }
+
+    SECTION("Find without explicit match_result") {
+        auto ctx_res = pcrepp::context<>::create(R"((?<name>\w+):\s*(?<value>\d+))");
+        REQUIRE(ctx_res.has_value());
+        auto const& ctx = *ctx_res;
+
+        auto const target = "Apple: 100, Banana: 200"sv;
+        auto res = ctx.find(target);
+
+        REQUIRE(res.has_value());
+        CHECK((*res)[0] == "Apple: 100");
+        CHECK((*res)["name"] == "Apple");
+        CHECK((*res)["value"] == "100");
+    }
+
+    SECTION("Find without explicit match_result returns empty result when no match") {
+        auto ctx_res = pcrepp::context<>::create(R"((?<name>\w+):\s*(?<value>\d+))");
+        REQUIRE(ctx_res.has_value());
+        auto const& ctx = *ctx_res;
+
+        auto res = ctx.find("Cherry");
+
+        REQUIRE(res.has_value());
+        CHECK_FALSE(static_cast<bool>(*res));
     }
 
     SECTION("Dynamic Replacement") {
@@ -64,8 +89,8 @@ TEST_CASE("Basic usage from user example", "[basic]") {
         REQUIRE(ctx_res.has_value());
         auto const& ctx = *ctx_res;
 
-        pcrepp::match_result mr(ctx.code);
-        auto res = ctx.search("hello", mr);
+        pcrepp::match_result mr(ctx);
+        auto res = ctx.find("hello", mr);
         REQUIRE(res.has_value());
         REQUIRE(*res > 0);
 

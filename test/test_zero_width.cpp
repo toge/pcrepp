@@ -6,13 +6,13 @@
 TEST_CASE("Zero-width matches", "[zero_width]") {
     using namespace std::string_view_literals;
 
-    SECTION("search_all with a*") {
+    SECTION("find_all with a*") {
         auto ctx_res = pcrepp::context<>::create(R"(a*)");
         REQUIRE(ctx_res.has_value());
         auto const& ctx = *ctx_res;
 
         auto const target = "baac"sv;
-        auto results = ctx.search_all(target);
+        auto results = ctx.find_all(target);
         std::vector<std::string_view> matches;
         for (auto const& mr : results) {
             matches.push_back(mr[0]);
@@ -29,13 +29,13 @@ TEST_CASE("Zero-width matches", "[zero_width]") {
         CHECK(matches[3] == "");
     }
 
-    SECTION("search_all with (.*)") {
+    SECTION("find_all with (.*)") {
         auto ctx_res = pcrepp::context<>::create(R"((.*))");
         REQUIRE(ctx_res.has_value());
         auto const& ctx = *ctx_res;
 
         auto const target = "abc"sv;
-        auto results = ctx.search_all(target);
+        auto results = ctx.find_all(target);
         std::vector<std::string_view> matches;
         for (auto const& mr : results) {
             matches.push_back(mr[0]);
@@ -77,7 +77,7 @@ TEST_CASE("Zero-width matches", "[zero_width]") {
             auto const& ctx = *ctx_res;
 
             auto const target = "ab"sv;
-            auto results = ctx.search_all(target);
+            auto results = ctx.find_all(target);
             auto it = results.begin();
 
             REQUIRE(it != results.end());
@@ -92,7 +92,7 @@ TEST_CASE("Zero-width matches", "[zero_width]") {
             auto const& ctx = *ctx_res;
 
             auto const target = "a"sv;
-            auto results = ctx.search_all(target);
+            auto results = ctx.find_all(target);
             auto it = results.begin();
 
             REQUIRE(it != results.end());
@@ -106,7 +106,7 @@ TEST_CASE("Zero-width matches", "[zero_width]") {
             auto const& ctx = *ctx_res;
 
             auto const target = "a"sv;
-            auto results = ctx.search_all(target);
+            auto results = ctx.find_all(target);
             auto it = results.begin();
 
             REQUIRE(it != results.end());
@@ -121,7 +121,7 @@ TEST_CASE("Zero-width matches", "[zero_width]") {
         // Let's see what pcrepp does.
         // Actually, pcrepp's split implementation doesn't seem to include capture groups.
         /*
-        for (auto& mr : search_all(target)) {
+        for (auto& mr : find_all(target)) {
           auto const start = mr.start_pos();
           auto const end = mr.end_pos();
           res.push_back(target.substr(last, start - last));
