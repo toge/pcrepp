@@ -8,11 +8,11 @@
 #include <ranges>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <vector>
 
-#define PCRE2_CODE_UNIT_WIDTH 8
 #include "fast_float/fast_float.h"
+
+#define PCRE2_CODE_UNIT_WIDTH 8
 #include "pcre2.h"
 
 namespace pcrepp {
@@ -527,6 +527,7 @@ inline auto iterator<UseJIT>::operator++() -> iterator& {
 
 }  // namespace pcrepp
 
+#if __has_include(<format>)
 #include <format>
 
 /**
@@ -548,3 +549,5 @@ struct std::formatter<pcrepp::match_result> : std::formatter<std::string_view> {
     return std::formatter<std::string_view>::format(buf, ctx);
   }
 };
+
+#endif
