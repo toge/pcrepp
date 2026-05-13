@@ -49,12 +49,13 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 find_package(PCRE2 CONFIG REQUIRED)
+find_package(FastFloat CONFIG REQUIRED)
 
 add_library(pcrepp INTERFACE)
 add_library(pcrepp::pcrepp ALIAS pcrepp)
 
 target_compile_features(pcrepp INTERFACE ${STD_CPP})
-target_link_libraries(pcrepp INTERFACE PCRE2::8BIT)
+target_link_libraries(pcrepp INTERFACE PCRE2::8BIT FastFloat::fast_float)
 target_include_directories(pcrepp
     INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

@@ -2,5 +2,6 @@
 
 include(CMakeFindDependencyMacro)
 find_dependency(pcre2 CONFIG)
+find_dependency(FastFloat CONFIG)
 
 include("${CMAKE_CURRENT_LIST_DIR}/pcreppTargets.cmake")
