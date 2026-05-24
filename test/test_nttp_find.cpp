@@ -2,13 +2,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <stdexcept>
 #include <string_view>
-#include <tuple>
-#include <type_traits>
 
-TEST_CASE("NTTP find returns tuple directly", "[nttp_find]") {
-  using expected_t = std::tuple<bool, std::string_view, std::string_view, std::string_view>;
-  static_assert(std::same_as<decltype(pcrepp::find<R"((\\w+):(\\d+))">("age:30")), expected_t>);
-
+TEST_CASE("NTTP find supports structured binding", "[nttp_find]") {
   auto [matched, whole, key, value] = pcrepp::find<R"((\w+):(\d+))">("age:30");
   CHECK(matched);
   CHECK(whole == "age:30");
@@ -16,32 +11,44 @@ TEST_CASE("NTTP find returns tuple directly", "[nttp_find]") {
   CHECK(value == "30");
 }
 
-TEST_CASE("NTTP find returns false tuple when no match", "[nttp_find]") {
-  auto [matched, whole, key, value] = pcrepp::find<R"((\w+):(\d+))">("nomatch");
-  CHECK_FALSE(matched);
-  CHECK(whole.empty());
-  CHECK(key.empty());
-  CHECK(value.empty());
+TEST_CASE("NTTP find supports get by index", "[nttp_find]") {
+  auto const res = pcrepp::find<R"((\w+):(\d+))">("age:30");
+  CHECK(pcrepp::get<0>(res));
+  CHECK(pcrepp::get<1>(res) == "age:30");
+  CHECK(pcrepp::get<2>(res) == "age");
+  CHECK(pcrepp::get<3>(res) == "30");
 }
 
-TEST_CASE("NTTP find_all returns tuple vector directly", "[nttp_find]") {
-  using expected_vec_t = std::vector<std::tuple<bool, std::string_view, std::string_view, std::string_view>>;
-  static_assert(std::same_as<decltype(pcrepp::find_all<R"((\\w+):(\\d+))">("age:30")), expected_vec_t>);
+TEST_CASE("NTTP find supports get by named capture", "[nttp_find]") {
+  auto const res = pcrepp::find<R"((?<key>\w+):(?<value>\d+))">("age:30");
+  CHECK(res.get<"key">() == "age");
+  CHECK(res.get<"value">() == "30");
+  CHECK(res.get<"missing">().empty());
+}
 
-  auto const all = pcrepp::find_all<R"((\w+):(\d+))">("age:30 height:180");
+TEST_CASE("NTTP find returns false result when no match", "[nttp_find]") {
+  auto const res = pcrepp::find<R"((\w+):(\d+))">("nomatch");
+  CHECK_FALSE(static_cast<bool>(res));
+  CHECK_FALSE(pcrepp::get<0>(res));
+  CHECK(pcrepp::get<1>(res).empty());
+  CHECK(pcrepp::get<2>(res).empty());
+  CHECK(pcrepp::get<3>(res).empty());
+}
+
+TEST_CASE("NTTP find_all returns result vector", "[nttp_find]") {
+  auto const all = pcrepp::find_all<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180");
   REQUIRE(all.size() == 2);
 
-  auto const [m1, w1, k1, v1] = all[0];
-  CHECK(m1);
-  CHECK(w1 == "age:30");
-  CHECK(k1 == "age");
-  CHECK(v1 == "30");
+  auto const& r1 = all[0];
+  CHECK(r1);
+  CHECK(r1.get<"key">() == "age");
+  CHECK(r1.get<"value">() == "30");
 
-  auto const [m2, w2, k2, v2] = all[1];
+  auto const [m2, whole2, key2, value2] = all[1];
   CHECK(m2);
-  CHECK(w2 == "height:180");
-  CHECK(k2 == "height");
-  CHECK(v2 == "180");
+  CHECK(whole2 == "height:180");
+  CHECK(key2 == "height");
+  CHECK(value2 == "180");
 }
 
 TEST_CASE("NTTP find throws on invalid pattern", "[nttp_find]") {

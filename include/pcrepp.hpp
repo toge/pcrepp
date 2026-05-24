@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <type_traits>
 #include <vector>
 
 #include "fast_float/fast_float.h"
@@ -541,6 +542,19 @@ public:
   }
 
   /**
+   * @brief 名前付きキャプチャグループのインデックスを取得する
+   *
+   * @param name キャプチャグループ名
+   * @return 見つかった場合はインデックス、見つからない場合は負値
+   */
+  auto capture_index(std::string_view const name) const noexcept -> int {
+    if (not code) {
+      return -1;
+    }
+    return pcre2_substring_number_from_name(code, reinterpret_cast<PCRE2_SPTR8>(name.data()));
+  }
+
+  /**
    * @brief 文字列に対して正規表現を検索し、マッチ結果をmatch_resultオブジェクトに格納する
    *
    * @param target 検索対象の文字列
@@ -721,42 +735,100 @@ public:
 
 /**
  * @brief NTTP パターンのキャプチャグループ数を取得する constexpr 変数
- * 
+ *
  * パターンのキャプチャグループ数に +1 したもの（全体マッチ分を含む）
- * 
+ *
  * @tparam Pattern NTTP として指定された正規表現パターン
  */
 template <fixed_string Pattern>
 inline constexpr auto nttp_group_count_v = detail::count_capture_groups(Pattern.view()) + 1;
 
 /**
- * @brief NTTP 版 find/find_all の戻り値型
- * 
- * `std::tuple<bool, std::string_view, std::string_view, ...>` の型エイリアス
- * bool はマッチ成否、std::string_view が全体マッチと各キャプチャグループ
- * 
+ * @brief NTTP 版 find の戻り値オブジェクト
+ *
+ * bool 変換・構造化束縛・`get<index>()`・`get<"name">()` をサポートします。
+ *
  * @tparam Pattern NTTP として指定された正規表現パターン
+ * @tparam UseJIT JIT コンパイルを使用するか
  */
-template <fixed_string Pattern>
-using nttp_find_result_t = detail::nttp_match_tuple_t<nttp_group_count_v<Pattern>>;
+template <fixed_string Pattern, bool UseJIT = true>
+struct nttp_match_result {
+  bool matched = false;
+  std::array<std::string_view, nttp_group_count_v<Pattern>> groups{};
+
+  explicit operator bool() const noexcept {
+    return matched;
+  }
+
+  template <size_t Index>
+  auto get() const noexcept {
+    static_assert(Index < (nttp_group_count_v<Pattern> + 1));
+    if constexpr (Index == 0) {
+      return matched;
+    } else {
+      return groups[Index - 1];
+    }
+  }
+
+  template <fixed_string Name>
+  auto get() const -> std::string_view {
+    if (not matched) {
+      return {};
+    }
+    static auto const ctx_res = context<UseJIT>::create(Pattern.view());
+    if (not ctx_res) {
+      return {};
+    }
+    auto const index = ctx_res->capture_index(Name.view());
+    if (index < 0) {
+      return {};
+    }
+    auto const uindex = static_cast<size_t>(index);
+    if (uindex >= groups.size()) {
+      return {};
+    }
+    return groups[uindex];
+  }
+};
+
+/**
+ * @brief NTTP 版 find/find_all の戻り値型エイリアス
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+using nttp_find_result_t = nttp_match_result<Pattern, UseJIT>;
+
+namespace detail {
+template <fixed_string Pattern, bool UseJIT, size_t... Is>
+auto make_nttp_result_impl(match_result const& mr, std::index_sequence<Is...>) -> nttp_find_result_t<Pattern, UseJIT> {
+  return {
+    .matched = static_cast<bool>(mr),
+    .groups = {mr.get(Is)...}
+  };
+}
+
+template <fixed_string Pattern, bool UseJIT>
+auto make_nttp_result(match_result const& mr) -> nttp_find_result_t<Pattern, UseJIT> {
+  return make_nttp_result_impl<Pattern, UseJIT>(mr, std::make_index_sequence<nttp_group_count_v<Pattern>>{});
+}
+}  // namespace detail
+
+/**
+ * @brief nttp_match_result を構造化束縛可能にする get（tuple-like プロトコル）
+ */
+template <size_t Index, fixed_string Pattern, bool UseJIT>
+auto get(nttp_match_result<Pattern, UseJIT> const& result) noexcept {
+  static_assert(Index < (nttp_group_count_v<Pattern> + 1));
+  return result.template get<Index>();
+}
 
 /**
  * @brief NTTP 版 find：正規表現をテンプレート引数で指定する検索
- * 
- * 与えられたパターンで最初のマッチを検索し、結果をタプルで返します。
+ *
+ * 与えられたパターンで最初のマッチを検索し、結果をオブジェクトで返します。
  * パターンコンパイルやマッチ実行で失敗した場合は std::runtime_error を送出します。
- * 
- * @tparam Pattern NTTP として指定された正規表現パターン（raw string literal推奨）
- * @tparam UseJIT JIT コンパイルを使用するか（デフォルト: true）
- * @param target 検索対象の文字列
- * @param start 検索開始位置（デフォルト: 0）
- * @param option PCRE2 のマッチオプション（PCRE2_NOTEMPTY など）
- * @return std::tuple<bool, std::string_view, ...>
- *         - マッチ成功時：bool=true, その後全体マッチと各キャプチャグループ
- *         - マッチなし：bool=false, その後は全て空の std::string_view
  */
 template <fixed_string Pattern, bool UseJIT = true>
-auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) -> nttp_find_result_t<Pattern> {
+auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) -> nttp_find_result_t<Pattern, UseJIT> {
   static auto const ctx_res = context<UseJIT>::create(Pattern.view());
   if (not ctx_res) {
     throw std::runtime_error{"NTTP find compile error: " + ctx_res.error()};
@@ -767,34 +839,24 @@ auto find(std::string_view const target, size_t const start = 0, unsigned int co
     throw std::runtime_error{"NTTP find match error: " + res.error()};
   }
   if (not *res) {
-    return detail::make_empty_match_tuple<nttp_group_count_v<Pattern>>();
+    return {};
   }
-  return detail::match_result_to_tuple<nttp_group_count_v<Pattern>>(*res);
+  return detail::make_nttp_result<Pattern, UseJIT>(*res);
 }
 
 /**
  * @brief NTTP 版 find_all：正規表現をテンプレート引数で指定する全マッチ検索
- * 
- * 与えられたパターンで全てのマッチを検索し、結果をタプルのベクトルで返します。
- * パターンコンパイルで失敗した場合は std::runtime_error を送出します。
- * 
- * @tparam Pattern NTTP として指定された正規表現パターン（raw string literal推奨）
- * @tparam UseJIT JIT コンパイルを使用するか（デフォルト: true）
- * @param target 検索対象の文字列
- * @return std::vector<std::tuple<bool, std::string_view, ...>>
- *         - 成功時：各要素は bool=true, その後全体マッチと各キャプチャグループ
- *         - マッチなし：空のベクトル
  */
 template <fixed_string Pattern, bool UseJIT = true>
-auto find_all(std::string_view const target) -> std::vector<nttp_find_result_t<Pattern>> {
+auto find_all(std::string_view const target) -> std::vector<nttp_find_result_t<Pattern, UseJIT>> {
   static auto const ctx_res = context<UseJIT>::create(Pattern.view());
   if (not ctx_res) {
     throw std::runtime_error{"NTTP find_all compile error: " + ctx_res.error()};
   }
   auto const& ctx = *ctx_res;
-  auto out = std::vector<nttp_find_result_t<Pattern>>{};
+  auto out = std::vector<nttp_find_result_t<Pattern, UseJIT>>{};
   for (auto const& mr : ctx.find_all(target)) {
-    out.push_back(detail::match_result_to_tuple<nttp_group_count_v<Pattern>>(mr));
+    out.push_back(detail::make_nttp_result<Pattern, UseJIT>(mr));
   }
   return out;
 }
@@ -830,6 +892,18 @@ inline auto iterator<UseJIT>::operator++() -> iterator& {
 }
 
 }  // namespace pcrepp
+
+namespace std {
+template <pcrepp::fixed_string Pattern, bool UseJIT>
+struct tuple_size<pcrepp::nttp_match_result<Pattern, UseJIT>>
+  : integral_constant<size_t, pcrepp::nttp_group_count_v<Pattern> + 1> {};
+
+template <size_t Index, pcrepp::fixed_string Pattern, bool UseJIT>
+struct tuple_element<Index, pcrepp::nttp_match_result<Pattern, UseJIT>> {
+  static_assert(Index < pcrepp::nttp_group_count_v<Pattern> + 1);
+  using type = conditional_t<Index == 0, bool, std::string_view>;
+};
+}  // namespace std
 
 #if __has_include(<format>)
 #include <format>

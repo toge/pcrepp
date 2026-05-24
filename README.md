@@ -54,22 +54,33 @@ target_link_libraries(your_target PRIVATE pcrepp::pcrepp)
 
 ### `pcrepp::find<"..."> / pcrepp::find_all<"...">` (NTTP API)
 
-正規表現をテンプレート引数（NTTP: Non-Type Template Parameter）で直接指定するヘルパー関数です。キャプチャグループ数がコンパイル時に決定され、型安全な **タプル** を直接返します。
+
+正規表現をテンプレート引数（NTTP: Non-Type Template Parameter）で直接指定するヘルパー関数です。戻り値は **tuple-like な専用オブジェクト** で、構造化束縛と `get()` の両方を使えます。
 
 #### `find<Pattern>(target, start = 0, option = 0)`
 
 ```cpp
-auto [matched, whole, key, value] = pcrepp::find<R"((\w+):(\d+))">("age:30");
-if (matched) {
-  // whole == "age:30", key == "age", value == "30"
+auto result = pcrepp::find<R"((?<key>\w+):(?<value>\d+))">("age:30");
+if (result) {
+  // index 指定
+  auto whole = pcrepp::get<1>(result);
+  // 名前付きキャプチャ指定
+  auto key = result.get<"key">();
+  auto value = result.get<"value">();
+}
+
+// 構造化束縛にも対応
+if (auto [matched, whole, key, value] = pcrepp::find<R"((\w+):(\d+))">("age:30"); matched) {
+  // ...
 }
 ```
 
-- **戻り値**: `std::tuple<bool, std::string_view, ...>`
-- **タプル要素**:
-  - `get<0>()`: `bool` — マッチ成功フラグ
-  - `get<1>()` 以降: `std::string_view` — 全体マッチと各キャプチャグループ（順序は `context::find()` と同じ）
-- **マッチしない場合**: `std::get<0>(tup) == false` で、それ以外は空の `std::string_view`
+- **戻り値**: `nttp_match_result<Pattern, ...>`（bool 変換可能）
+- **要素順序**:
+  - `pcrepp::get<0>(result)`: `bool` — マッチ成功フラグ
+  - `pcrepp::get<1>(result)` 以降: `std::string_view` — 全体マッチと各キャプチャグループ
+- **名前付き取得**: `result.get<"name">()`
+- **マッチしない場合**: `bool` は `false` で、それ以外は空の `std::string_view`
 - **エラー時**: `std::runtime_error` を送出
 
 #### `find_all<Pattern>(target)`
@@ -77,16 +88,16 @@ if (matched) {
 すべてのマッチを取得します。
 
 ```cpp
-auto all = pcrepp::find_all<R"((\w+):(\d+))">("age:30 height:180");
-for (auto const& [m, whole, key, value] : all) {
-  if (not m) continue;
-  // ...
+auto all = pcrepp::find_all<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180");
+for (auto const& result : all) {
+  if (not result) continue;
+  auto key = result.get<"key">();
+  auto value = result.get<"value">();
 }
 ```
 
-- **戻り値**: `std::vector<std::tuple<bool, std::string_view, ...>>`
+- **戻り値**: `std::vector<nttp_match_result<Pattern, ...>>`
 - **エラー時**: `std::runtime_error` を送出
-
 #### 利点
 
 - **構造化束縛しやすい**: `auto [matched, ...] = find<...>(...)` のように直接展開可能
