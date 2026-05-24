@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <charconv>
 #include <concepts>
 #include <expected>
@@ -8,6 +9,7 @@
 #include <ranges>
 #include <tuple>
 #include <string>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -731,7 +733,7 @@ inline constexpr auto nttp_group_count_v = detail::count_capture_groups(Pattern.
  * @brief NTTP 版 find/find_all の戻り値型
  * 
  * `std::tuple<bool, std::string_view, std::string_view, ...>` の型エイリアス
- * bool は マッチ成否、std::string_view が全体マッチと各キャプチャグループ
+ * bool はマッチ成否、std::string_view が全体マッチと各キャプチャグループ
  * 
  * @tparam Pattern NTTP として指定された正規表現パターン
  */
@@ -742,28 +744,27 @@ using nttp_find_result_t = detail::nttp_match_tuple_t<nttp_group_count_v<Pattern
  * @brief NTTP 版 find：正規表現をテンプレート引数で指定する検索
  * 
  * 与えられたパターンで最初のマッチを検索し、結果をタプルで返します。
- * パターンはコンパイル時に処理され、キャプチャグループ数がテンプレートパラメータとなります。
+ * パターンコンパイルやマッチ実行で失敗した場合は std::runtime_error を送出します。
  * 
  * @tparam Pattern NTTP として指定された正規表現パターン（raw string literal推奨）
  * @tparam UseJIT JIT コンパイルを使用するか（デフォルト: true）
  * @param target 検索対象の文字列
  * @param start 検索開始位置（デフォルト: 0）
  * @param option PCRE2 のマッチオプション（PCRE2_NOTEMPTY など）
- * @return std::expected<std::tuple<bool, std::string_view, ...>, std::string>
- *         - 成功時：bool=true, その後全体マッチと各キャプチャグループ
+ * @return std::tuple<bool, std::string_view, ...>
+ *         - マッチ成功時：bool=true, その後全体マッチと各キャプチャグループ
  *         - マッチなし：bool=false, その後は全て空の std::string_view
- *         - エラー時：std::unexpected でエラーメッセージを返す
  */
 template <fixed_string Pattern, bool UseJIT = true>
-auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) -> std::expected<nttp_find_result_t<Pattern>, std::string> {
+auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) -> nttp_find_result_t<Pattern> {
   static auto const ctx_res = context<UseJIT>::create(Pattern.view());
   if (not ctx_res) {
-    return std::unexpected{ctx_res.error()};
+    throw std::runtime_error{"NTTP find compile error: " + ctx_res.error()};
   }
   auto const& ctx = *ctx_res;
   auto const res = ctx.find(target, start, option);
   if (not res) {
-    return std::unexpected{res.error()};
+    throw std::runtime_error{"NTTP find match error: " + res.error()};
   }
   if (not *res) {
     return detail::make_empty_match_tuple<nttp_group_count_v<Pattern>>();
@@ -775,21 +776,20 @@ auto find(std::string_view const target, size_t const start = 0, unsigned int co
  * @brief NTTP 版 find_all：正規表現をテンプレート引数で指定する全マッチ検索
  * 
  * 与えられたパターンで全てのマッチを検索し、結果をタプルのベクトルで返します。
- * パターンはコンパイル時に処理され、各マッチがタプルの vector に格納されます。
+ * パターンコンパイルで失敗した場合は std::runtime_error を送出します。
  * 
  * @tparam Pattern NTTP として指定された正規表現パターン（raw string literal推奨）
  * @tparam UseJIT JIT コンパイルを使用するか（デフォルト: true）
  * @param target 検索対象の文字列
- * @return std::expected<std::vector<std::tuple<bool, std::string_view, ...>>, std::string>
- *         - 成功時：ベクトル内の各タプルは bool=true, その後全体マッチと各キャプチャグループ
- *         - マッチなし：空のベクトルを返す
- *         - エラー時：std::unexpected でエラーメッセージを返す
+ * @return std::vector<std::tuple<bool, std::string_view, ...>>
+ *         - 成功時：各要素は bool=true, その後全体マッチと各キャプチャグループ
+ *         - マッチなし：空のベクトル
  */
 template <fixed_string Pattern, bool UseJIT = true>
-auto find_all(std::string_view const target) -> std::expected<std::vector<nttp_find_result_t<Pattern>>, std::string> {
+auto find_all(std::string_view const target) -> std::vector<nttp_find_result_t<Pattern>> {
   static auto const ctx_res = context<UseJIT>::create(Pattern.view());
   if (not ctx_res) {
-    return std::unexpected{ctx_res.error()};
+    throw std::runtime_error{"NTTP find_all compile error: " + ctx_res.error()};
   }
   auto const& ctx = *ctx_res;
   auto out = std::vector<nttp_find_result_t<Pattern>>{};

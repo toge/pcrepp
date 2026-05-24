@@ -54,52 +54,44 @@ target_link_libraries(your_target PRIVATE pcrepp::pcrepp)
 
 ### `pcrepp::find<"..."> / pcrepp::find_all<"...">` (NTTP API)
 
-正規表現をテンプレート引数（NTTP: Non-Type Template Parameter）で直接指定するヘルパー関数です。キャプチャグループ数がコンパイル時に決定され、型安全な **タプル** で結果を返します。
+正規表現をテンプレート引数（NTTP: Non-Type Template Parameter）で直接指定するヘルパー関数です。キャプチャグループ数がコンパイル時に決定され、型安全な **タプル** を直接返します。
 
 #### `find<Pattern>(target, start = 0, option = 0)`
 
 ```cpp
-auto res = pcrepp::find<R"((\w+):(\d+))">("age:30");
-if (res) {
-  auto const& tup = *res;
-  auto matched = std::get<0>(tup);       // bool: マッチしたか
-  auto whole = std::get<1>(tup);         // 全体マッチ (get<0> 相当)
-  auto group1 = std::get<2>(tup);        // グループ 1
-  auto group2 = std::get<3>(tup);        // グループ 2
-  // ...
+auto [matched, whole, key, value] = pcrepp::find<R"((\w+):(\d+))">("age:30");
+if (matched) {
+  // whole == "age:30", key == "age", value == "30"
 }
 ```
 
-- **戻り値**: `std::expected<std::tuple<bool, std::string_view, ...>, std::string>`
+- **戻り値**: `std::tuple<bool, std::string_view, ...>`
 - **タプル要素**:
   - `get<0>()`: `bool` — マッチ成功フラグ
   - `get<1>()` 以降: `std::string_view` — 全体マッチと各キャプチャグループ（順序は `context::find()` と同じ）
 - **マッチしない場合**: `std::get<0>(tup) == false` で、それ以外は空の `std::string_view`
+- **エラー時**: `std::runtime_error` を送出
 
 #### `find_all<Pattern>(target)`
 
 すべてのマッチを取得します。
 
 ```cpp
-auto res_all = pcrepp::find_all<R"((\w+):(\d+))">("age:30 height:180");
-if (res_all) {
-  for (auto const& tup : *res_all) {
-    auto matched = std::get<0>(tup);
-    auto whole = std::get<1>(tup);
-    auto group1 = std::get<2>(tup);
-    auto group2 = std::get<3>(tup);
-    // ...
-  }
+auto all = pcrepp::find_all<R"((\w+):(\d+))">("age:30 height:180");
+for (auto const& [m, whole, key, value] : all) {
+  if (not m) continue;
+  // ...
 }
 ```
 
-- **戻り値**: `std::expected<std::vector<std::tuple<bool, std::string_view, ...>>, std::string>`
+- **戻り値**: `std::vector<std::tuple<bool, std::string_view, ...>>`
+- **エラー時**: `std::runtime_error` を送出
 
 #### 利点
 
+- **構造化束縛しやすい**: `auto [matched, ...] = find<...>(...)` のように直接展開可能
 - **型安全**: タプル型がコンパイル時に確定するため、IDE 補完やコンパイラチェックが効きやすい
-- **性能**: パターン文字列がコンパイル時に処理され、NTTP を活用した最適化が可能
-- **簡潔**: `context` を明示的に管理する必要がなく、ワンライナー的な使用法が可能
+- **簡潔**: `context` や `std::expected` の分岐処理を省いて使える
 
 ### `pcrepp::match_result`
 個別のマッチング結果を保持するクラスです。
@@ -181,34 +173,23 @@ auto main() -> int {
   auto const target = "age:30 height:180"sv;
 
   // NTTP 版の find_all で全マッチを取得
-  auto res_all = pcrepp::find_all<R"((\w+):(\d+))">(target);
-  if (not res_all) {
-    std::cerr << "Error: " << res_all.error() << "\n";
-    return 1;
-  }
+  auto const all = pcrepp::find_all<R"((\w+):(\d+))">(target);
 
   std::cout << "--- NTTP find_all ---\n";
-  for (auto const& tup : *res_all) {
-    auto matched = std::get<0>(tup);
+  for (auto const& [matched, whole, key, value] : all) {
     if (not matched) continue;
-
-    auto whole = std::get<1>(tup);   // 全体マッチ
-    auto key = std::get<2>(tup);     // グループ 1
-    auto value = std::get<3>(tup);   // グループ 2
-
     std::cout << "Key: " << key << ", Value: " << value << "\n";
   }
 
   // NTTP 版の find で最初のマッチを取得
-  auto res = pcrepp::find<R"((\w+):(\d+))">(target);
-  if (res && std::get<0>(*res)) {
-    auto key = std::get<2>(*res);
-    auto value = std::get<3>(*res);
+  if (auto const [matched, whole, key, value] = pcrepp::find<R"((\w+):(\d+))">(target); matched) {
     std::cout << "\nFirst match: " << key << " = " << value << "\n";
   }
 
   return 0;
 }
 ```
+
+## ライセンス
 
 このプロジェクトは [MIT ライセンス](LICENSE) の下で公開されています。
