@@ -6,8 +6,10 @@
 #include <iterator>
 #include <memory>
 #include <ranges>
+#include <tuple>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "fast_float/fast_float.h"
@@ -16,6 +18,23 @@
 #include "pcre2.h"
 
 namespace pcrepp {
+
+template <size_t N>
+struct fixed_string {
+  std::array<char, N> value{};
+
+  constexpr fixed_string(char const (&src)[N]) {
+    for (auto i = size_t{0}; i < N; ++i) {
+      value[i] = src[i];
+    }
+  }
+
+  constexpr auto view() const noexcept -> std::string_view {
+    return {value.data(), N - 1};
+  }
+};
+template <size_t N>
+fixed_string(char const (&)[N]) -> fixed_string<N>;
 
 template <typename T>
 concept supported_integer_get_type =
@@ -46,7 +65,97 @@ inline auto constexpr supported_match_result_get_is_nothrow =
   std::same_as<T, double> ||
   supported_integer_get_type<T>;
 
+struct match_result;
+
 namespace detail {
+constexpr auto is_named_capture_after_question(std::string_view const pattern, size_t const open_paren_pos) noexcept -> bool {
+  auto const q_pos = open_paren_pos + 1;
+  if (q_pos >= pattern.size() || pattern[q_pos] != '?') {
+    return false;
+  }
+  auto const marker_pos = q_pos + 1;
+  if (marker_pos >= pattern.size()) {
+    return false;
+  }
+  if (pattern[marker_pos] == '\'') {
+    return true;
+  }
+  if (pattern[marker_pos] == 'P') {
+    return marker_pos + 1 < pattern.size() && pattern[marker_pos + 1] == '<';
+  }
+  if (pattern[marker_pos] == '<') {
+    if (marker_pos + 1 >= pattern.size()) {
+      return false;
+    }
+    auto const next = pattern[marker_pos + 1];
+    return next != '=' && next != '!';
+  }
+  return false;
+}
+
+constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> size_t {
+  auto capture_count = size_t{0};
+  auto escaped = false;
+  auto in_class = false;
+
+  for (auto i = size_t{0}; i < pattern.size(); ++i) {
+    auto const ch = pattern[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch == '\\') {
+      escaped = true;
+      continue;
+    }
+    if (in_class) {
+      if (ch == ']') {
+        in_class = false;
+      }
+      continue;
+    }
+    if (ch == '[') {
+      in_class = true;
+      continue;
+    }
+    if (ch != '(') {
+      continue;
+    }
+    if (i + 1 >= pattern.size() || pattern[i + 1] != '?') {
+      ++capture_count;
+      continue;
+    }
+    if (is_named_capture_after_question(pattern, i)) {
+      ++capture_count;
+    }
+  }
+  return capture_count;
+}
+
+template <typename T, size_t>
+struct same_type {
+  using type = T;
+};
+
+template <typename T, size_t... Is>
+auto make_repeated_tuple_type_impl(std::index_sequence<Is...>) -> std::tuple<typename same_type<T, Is>::type...>;
+
+template <size_t N>
+using string_view_tuple_t = decltype(make_repeated_tuple_type_impl<std::string_view>(std::make_index_sequence<N>{}));
+
+template <size_t N>
+using nttp_match_tuple_t = decltype(std::tuple_cat(std::tuple<bool>{}, std::declval<string_view_tuple_t<N>>()));
+
+template <size_t N, size_t... Is>
+constexpr auto make_empty_match_tuple_impl(std::index_sequence<Is...>) noexcept -> nttp_match_tuple_t<N> {
+  return std::tuple_cat(std::make_tuple(false), std::make_tuple((static_cast<void>(Is), std::string_view{})...));
+}
+
+template <size_t N>
+constexpr auto make_empty_match_tuple() noexcept -> nttp_match_tuple_t<N> {
+  return make_empty_match_tuple_impl<N>(std::make_index_sequence<N>{});
+}
+
 template <supported_integer_get_type T>
 auto parse_integer(std::string_view const sv) noexcept -> T {
   auto value = T{};
@@ -199,6 +308,18 @@ private:
   template <bool UseJIT> friend struct iterator;
   template <bool UseJIT> friend struct context;
 };
+
+namespace detail {
+template <size_t N, size_t... Is>
+auto match_result_to_tuple_impl(match_result const& mr, std::index_sequence<Is...>) -> nttp_match_tuple_t<N> {
+  return std::tuple_cat(std::make_tuple(static_cast<bool>(mr)), std::make_tuple(mr.get(Is)...));
+}
+
+template <size_t N>
+auto match_result_to_tuple(match_result const& mr) -> nttp_match_tuple_t<N> {
+  return match_result_to_tuple_impl<N>(mr, std::make_index_sequence<N>{});
+}
+}  // namespace detail
 
 /**
  * @struct iterator
@@ -494,6 +615,43 @@ public:
     return res;
   }
 };
+
+template <fixed_string Pattern>
+inline constexpr auto nttp_group_count_v = detail::count_capture_groups(Pattern.view()) + 1;
+
+template <fixed_string Pattern>
+using nttp_find_result_t = detail::nttp_match_tuple_t<nttp_group_count_v<Pattern>>;
+
+template <fixed_string Pattern, bool UseJIT = true>
+auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) -> std::expected<nttp_find_result_t<Pattern>, std::string> {
+  static auto const ctx_res = context<UseJIT>::create(Pattern.view());
+  if (not ctx_res) {
+    return std::unexpected{ctx_res.error()};
+  }
+  auto const& ctx = *ctx_res;
+  auto const res = ctx.find(target, start, option);
+  if (not res) {
+    return std::unexpected{res.error()};
+  }
+  if (not *res) {
+    return detail::make_empty_match_tuple<nttp_group_count_v<Pattern>>();
+  }
+  return detail::match_result_to_tuple<nttp_group_count_v<Pattern>>(*res);
+}
+
+template <fixed_string Pattern, bool UseJIT = true>
+auto find_all(std::string_view const target) -> std::expected<std::vector<nttp_find_result_t<Pattern>>, std::string> {
+  static auto const ctx_res = context<UseJIT>::create(Pattern.view());
+  if (not ctx_res) {
+    return std::unexpected{ctx_res.error()};
+  }
+  auto const& ctx = *ctx_res;
+  auto out = std::vector<nttp_find_result_t<Pattern>>{};
+  for (auto const& mr : ctx.find_all(target)) {
+    out.push_back(detail::match_result_to_tuple<nttp_group_count_v<Pattern>>(mr));
+  }
+  return out;
+}
 
 template <bool UseJIT>
 inline match_result::match_result(context<UseJIT> const& ctx) : match_result(ctx.code) {}
