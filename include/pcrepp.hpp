@@ -19,16 +19,32 @@
 
 namespace pcrepp {
 
+/**
+ * @struct fixed_string
+ * @brief NTTP用のコンパイル時文字列ラッパー
+ * 
+ * テンプレート引数として正規表現パターンを指定するためのヘルパー型です。
+ * char配列をコンパイル時に std::string_view に変換します。
+ * 
+ * @tparam N 文字列の長さ（null終端を含む）
+ */
 template <size_t N>
 struct fixed_string {
   std::array<char, N> value{};
 
+  /**
+   * @brief コンストラクタ：文字列リテラルから初期化
+   */
   constexpr fixed_string(char const (&src)[N]) {
     for (auto i = size_t{0}; i < N; ++i) {
       value[i] = src[i];
     }
   }
 
+  /**
+   * @brief 文字列を std::string_view に変換
+   * @return null終端を除いた文字列ビュー
+   */
   constexpr auto view() const noexcept -> std::string_view {
     return {value.data(), N - 1};
   }
@@ -68,6 +84,23 @@ inline auto constexpr supported_match_result_get_is_nothrow =
 struct match_result;
 
 namespace detail {
+/**
+ * @brief `(?` の直後が名前付きキャプチャグループかを判定
+ * 
+ * PCRE2 の以下の構文を識別します：
+ * - `(?<name>...)` / `(?'name'...)` : 名前付きキャプチャ
+ * - `(?P<name>...)` : Python形式の名前付きキャプチャ
+ * 
+ * 次の非キャプチャ構文は false を返します：
+ * - `(?:...)` : 非キャプチャグループ
+ * - `(?=...)` / `(?!...)` : lookahead
+ * - `(?<=...)` / `(?<!...)` : lookbehind
+ * - `(?>...)` : atomic group
+ * 
+ * @param pattern 正規表現パターン
+ * @param open_paren_pos 開き括弧 '(' の位置
+ * @return 名前付きキャプチャグループなら true、それ以外は false
+ */
 constexpr auto is_named_capture_after_question(std::string_view const pattern, size_t const open_paren_pos) noexcept -> bool {
   auto const q_pos = open_paren_pos + 1;
   if (q_pos >= pattern.size() || pattern[q_pos] != '?') {
@@ -93,6 +126,26 @@ constexpr auto is_named_capture_after_question(std::string_view const pattern, s
   return false;
 }
 
+/**
+ * @brief 正規表現パターンのキャプチャグループ数を constexpr で計算
+ * 
+ * 開き括弧を走査し、エスケープと文字クラスを考慮して、キャプチャグループ数を数えます。
+ * 以下は加算されます：
+ * - `(...)` : 通常のキャプチャグループ
+ * - `(?<name>...)` / `(?'name'...)` / `(?P<name>...)` : 名前付きキャプチャ
+ * 
+ * 以下は加算されません：
+ * - `(?:...)` : 非キャプチャグループ
+ * - `(?=...)` / `(?!...)` / `(?<=...)` / `(?<!...)` : lookaround
+ * - `(?>...)` : atomic group
+ * - `(?|...)` : branch reset group
+ * - `(?#...)` : コメント
+ * - エスケープされた括弧 `\(` / `\)`
+ * - 文字クラス内の括弧 `[...]`
+ * 
+ * @param pattern 正規表現パターン
+ * @return キャプチャグループ数（ゼロ以上）
+ */
 constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> size_t {
   auto capture_count = size_t{0};
   auto escaped = false;
@@ -132,25 +185,56 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
   return capture_count;
 }
 
+/**
+ * @brief N個の std::string_view からなるタプル型を生成するメタ関数
+ * @tparam T 要素型（通常は std::string_view）
+ * @tparam Is インデックスシーケンス
+ */
 template <typename T, size_t>
 struct same_type {
   using type = T;
 };
 
+/**
+ * @brief N個の std::string_view をまとめたタプル型（内部実装用）
+ * @tparam T 要素型
+ * @tparam Is インデックスシーケンス
+ */
 template <typename T, size_t... Is>
 auto make_repeated_tuple_type_impl(std::index_sequence<Is...>) -> std::tuple<typename same_type<T, Is>::type...>;
 
+/**
+ * @brief N個の std::string_view をまとめたタプル型
+ * @tparam N タプルの要素数
+ */
 template <size_t N>
 using string_view_tuple_t = decltype(make_repeated_tuple_type_impl<std::string_view>(std::make_index_sequence<N>{}));
 
+/**
+ * @brief マッチ結果を表すタプル型：bool（マッチ成否） + N個の std::string_view
+ * @tparam N キャプチャグループ数
+ */
 template <size_t N>
 using nttp_match_tuple_t = decltype(std::tuple_cat(std::tuple<bool>{}, std::declval<string_view_tuple_t<N>>()));
 
+/**
+ * @brief マッチなしを表す空のタプルを生成（内部実装用）
+ * @tparam N タプルの要素数
+ * @tparam Is インデックスシーケンス
+ */
 template <size_t N, size_t... Is>
 constexpr auto make_empty_match_tuple_impl(std::index_sequence<Is...>) noexcept -> nttp_match_tuple_t<N> {
   return std::tuple_cat(std::make_tuple(false), std::make_tuple((static_cast<void>(Is), std::string_view{})...));
 }
 
+/**
+ * @brief マッチなしを表す空のタプルを生成
+ * 
+ * マッチが失敗した場合に bool=false で初期化された全要素を返します。
+ * 
+ * @tparam N タプルの要素数（bool + キャプチャ数）
+ * @return bool(false) + N個の空の std::string_view を含むタプル
+ */
 template <size_t N>
 constexpr auto make_empty_match_tuple() noexcept -> nttp_match_tuple_t<N> {
   return make_empty_match_tuple_impl<N>(std::make_index_sequence<N>{});
@@ -310,11 +394,28 @@ private:
 };
 
 namespace detail {
+/**
+ * @brief match_result をタプルに変換（内部実装用）
+ * 
+ * match_result の各キャプチャグループを std::get<> でアクセス可能なタプルに変換します。
+ * 
+ * @tparam N タプルの要素数（bool + キャプチャ数）
+ * @tparam Is インデックスシーケンス
+ * @param mr マッチ結果
+ * @return bool(true) + 全体マッチ + 各キャプチャグループを含むタプル
+ */
 template <size_t N, size_t... Is>
 auto match_result_to_tuple_impl(match_result const& mr, std::index_sequence<Is...>) -> nttp_match_tuple_t<N> {
   return std::tuple_cat(std::make_tuple(static_cast<bool>(mr)), std::make_tuple(mr.get(Is)...));
 }
 
+/**
+ * @brief match_result をタプルに変換（パブリック用）
+ * 
+ * @tparam N タプルの要素数（bool + キャプチャ数）
+ * @param mr マッチ結果
+ * @return bool(マッチ成功) + 全体マッチ + 各キャプチャグループを含むタプル
+ */
 template <size_t N>
 auto match_result_to_tuple(match_result const& mr) -> nttp_match_tuple_t<N> {
   return match_result_to_tuple_impl<N>(mr, std::make_index_sequence<N>{});
@@ -616,12 +717,43 @@ public:
   }
 };
 
+/**
+ * @brief NTTP パターンのキャプチャグループ数を取得する constexpr 変数
+ * 
+ * パターンのキャプチャグループ数に +1 したもの（全体マッチ分を含む）
+ * 
+ * @tparam Pattern NTTP として指定された正規表現パターン
+ */
 template <fixed_string Pattern>
 inline constexpr auto nttp_group_count_v = detail::count_capture_groups(Pattern.view()) + 1;
 
+/**
+ * @brief NTTP 版 find/find_all の戻り値型
+ * 
+ * `std::tuple<bool, std::string_view, std::string_view, ...>` の型エイリアス
+ * bool は マッチ成否、std::string_view が全体マッチと各キャプチャグループ
+ * 
+ * @tparam Pattern NTTP として指定された正規表現パターン
+ */
 template <fixed_string Pattern>
 using nttp_find_result_t = detail::nttp_match_tuple_t<nttp_group_count_v<Pattern>>;
 
+/**
+ * @brief NTTP 版 find：正規表現をテンプレート引数で指定する検索
+ * 
+ * 与えられたパターンで最初のマッチを検索し、結果をタプルで返します。
+ * パターンはコンパイル時に処理され、キャプチャグループ数がテンプレートパラメータとなります。
+ * 
+ * @tparam Pattern NTTP として指定された正規表現パターン（raw string literal推奨）
+ * @tparam UseJIT JIT コンパイルを使用するか（デフォルト: true）
+ * @param target 検索対象の文字列
+ * @param start 検索開始位置（デフォルト: 0）
+ * @param option PCRE2 のマッチオプション（PCRE2_NOTEMPTY など）
+ * @return std::expected<std::tuple<bool, std::string_view, ...>, std::string>
+ *         - 成功時：bool=true, その後全体マッチと各キャプチャグループ
+ *         - マッチなし：bool=false, その後は全て空の std::string_view
+ *         - エラー時：std::unexpected でエラーメッセージを返す
+ */
 template <fixed_string Pattern, bool UseJIT = true>
 auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) -> std::expected<nttp_find_result_t<Pattern>, std::string> {
   static auto const ctx_res = context<UseJIT>::create(Pattern.view());
@@ -639,6 +771,20 @@ auto find(std::string_view const target, size_t const start = 0, unsigned int co
   return detail::match_result_to_tuple<nttp_group_count_v<Pattern>>(*res);
 }
 
+/**
+ * @brief NTTP 版 find_all：正規表現をテンプレート引数で指定する全マッチ検索
+ * 
+ * 与えられたパターンで全てのマッチを検索し、結果をタプルのベクトルで返します。
+ * パターンはコンパイル時に処理され、各マッチがタプルの vector に格納されます。
+ * 
+ * @tparam Pattern NTTP として指定された正規表現パターン（raw string literal推奨）
+ * @tparam UseJIT JIT コンパイルを使用するか（デフォルト: true）
+ * @param target 検索対象の文字列
+ * @return std::expected<std::vector<std::tuple<bool, std::string_view, ...>>, std::string>
+ *         - 成功時：ベクトル内の各タプルは bool=true, その後全体マッチと各キャプチャグループ
+ *         - マッチなし：空のベクトルを返す
+ *         - エラー時：std::unexpected でエラーメッセージを返す
+ */
 template <fixed_string Pattern, bool UseJIT = true>
 auto find_all(std::string_view const target) -> std::expected<std::vector<nttp_find_result_t<Pattern>>, std::string> {
   static auto const ctx_res = context<UseJIT>::create(Pattern.view());
