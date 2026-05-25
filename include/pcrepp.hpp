@@ -15,6 +15,7 @@
 #include <type_traits>
 #include <vector>
 
+// frozencharsのヘッダが存在する場合は型変換のためにインクルードする
 #if __has_include(<frozenchars.hpp>)
 #include <frozenchars.hpp>
 #define PCREPP_HAS_FROZENCHARS
@@ -33,10 +34,10 @@ namespace pcrepp {
 /**
  * @struct fixed_string
  * @brief NTTP用のコンパイル時文字列ラッパー
- * 
+ *
  * テンプレート引数として正規表現パターンを指定するためのヘルパー型です。
  * char配列をコンパイル時に std::string_view に変換します。
- * 
+ *
  * @tparam N 文字列の長さ（null終端を含む）
  */
 template <size_t N>
@@ -143,17 +144,17 @@ struct match_result;
 namespace detail {
 /**
  * @brief `(?` の直後が名前付きキャプチャグループかを判定
- * 
+ *
  * PCRE2 の以下の構文を識別します：
  * - `(?<name>...)` / `(?'name'...)` : 名前付きキャプチャ
  * - `(?P<name>...)` : Python形式の名前付きキャプチャ
- * 
+ *
  * 次の非キャプチャ構文は false を返します：
  * - `(?:...)` : 非キャプチャグループ
  * - `(?=...)` / `(?!...)` : lookahead
  * - `(?<=...)` / `(?<!...)` : lookbehind
  * - `(?>...)` : atomic group
- * 
+ *
  * @param pattern 正規表現パターン
  * @param open_paren_pos 開き括弧 '(' の位置
  * @return 名前付きキャプチャグループなら true、それ以外は false
@@ -185,12 +186,12 @@ constexpr auto is_named_capture_after_question(std::string_view const pattern, s
 
 /**
  * @brief 正規表現パターンのキャプチャグループ数を constexpr で計算
- * 
+ *
  * 開き括弧を走査し、エスケープと文字クラスを考慮して、キャプチャグループ数を数えます。
  * 以下は加算されます：
  * - `(...)` : 通常のキャプチャグループ
  * - `(?<name>...)` / `(?'name'...)` / `(?P<name>...)` : 名前付きキャプチャ
- * 
+ *
  * 以下は加算されません：
  * - `(?:...)` : 非キャプチャグループ
  * - `(?=...)` / `(?!...)` / `(?<=...)` / `(?<!...)` : lookaround
@@ -199,7 +200,7 @@ constexpr auto is_named_capture_after_question(std::string_view const pattern, s
  * - `(?#...)` : コメント
  * - エスケープされた括弧 `\(` / `\)`
  * - 文字クラス内の括弧 `[...]`
- * 
+ *
  * @param pattern 正規表現パターン
  * @return キャプチャグループ数（ゼロ以上）
  */
@@ -286,9 +287,9 @@ constexpr auto make_empty_match_tuple_impl(std::index_sequence<Is...>) noexcept 
 
 /**
  * @brief マッチなしを表す空のタプルを生成
- * 
+ *
  * マッチが失敗した場合に bool=false で初期化された全要素を返します。
- * 
+ *
  * @tparam N タプルの要素数（bool + キャプチャ数）
  * @return bool(false) + N個の空の std::string_view を含むタプル
  */
@@ -453,9 +454,9 @@ private:
 namespace detail {
 /**
  * @brief match_result をタプルに変換（内部実装用）
- * 
+ *
  * match_result の各キャプチャグループを std::get<> でアクセス可能なタプルに変換します。
- * 
+ *
  * @tparam N タプルの要素数（bool + キャプチャ数）
  * @tparam Is インデックスシーケンス
  * @param mr マッチ結果
@@ -468,7 +469,7 @@ auto match_result_to_tuple_impl(match_result const& mr, std::index_sequence<Is..
 
 /**
  * @brief match_result をタプルに変換（パブリック用）
- * 
+ *
  * @tparam N タプルの要素数（bool + キャプチャ数）
  * @param mr マッチ結果
  * @return bool(マッチ成功) + 全体マッチ + 各キャプチャグループを含むタプル
@@ -977,6 +978,57 @@ template <fixed_string Pattern>
 constexpr auto operator""_re() {
   return compile<Pattern>();
 }
+
+// frozenchars ライブラリが利用可能な場合、テンプレート引数に指定可能にする
+#ifdef PCREPP_HAS_FROZENCHARS
+/**
+ * @brief frozenchars::FrozenString 版 find
+ */
+template <frozenchars::FrozenString Pattern, bool UseJIT = true>
+auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) {
+  return find<to_fixed_string(Pattern), UseJIT>(target, start, option);
+}
+
+/**
+ * @brief frozenchars::FixedString 版 find
+ */
+template <frozenchars::FixedString Pattern, bool UseJIT = true>
+auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) {
+  return find<to_fixed_string(Pattern), UseJIT>(target, start, option);
+}
+
+/**
+ * @brief frozenchars::FrozenString 版 find_all
+ */
+template <frozenchars::FrozenString Pattern, bool UseJIT = true>
+auto find_all(std::string_view const target) {
+  return find_all<to_fixed_string(Pattern), UseJIT>(target);
+}
+
+/**
+ * @brief frozenchars::FixedString 版 find_all
+ */
+template <frozenchars::FixedString Pattern, bool UseJIT = true>
+auto find_all(std::string_view const target) {
+  return find_all<to_fixed_string(Pattern), UseJIT>(target);
+}
+
+/**
+ * @brief frozenchars::FrozenString 版 compile
+ */
+template <frozenchars::FrozenString Pattern, bool UseJIT = true>
+constexpr auto compile() {
+  return compile<to_fixed_string(Pattern), UseJIT>();
+}
+
+/**
+ * @brief frozenchars::FixedString 版 compile
+ */
+template <frozenchars::FixedString Pattern, bool UseJIT = true>
+constexpr auto compile() {
+  return compile<to_fixed_string(Pattern), UseJIT>();
+}
+#endif // PCREPP_HAS_FROZENCHARS
 
 template <bool UseJIT>
 inline match_result::match_result(context<UseJIT> const& ctx) : match_result(ctx.code) {}
