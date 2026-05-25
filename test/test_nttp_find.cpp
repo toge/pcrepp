@@ -54,3 +54,26 @@ TEST_CASE("NTTP find_all returns result vector", "[nttp_find]") {
 TEST_CASE("NTTP find throws on invalid pattern", "[nttp_find]") {
   CHECK_THROWS_AS((void)pcrepp::find<"(">("x"), std::runtime_error);
 }
+
+TEST_CASE("NTTP compile and _re literal", "[nttp_find]") {
+  using namespace pcrepp;
+
+  SECTION("compile API") {
+    static constexpr auto re = compile<R"((\w+):(\d+))">();
+    auto [m, whole, key, value] = re.find("age:30");
+    CHECK(m);
+    CHECK(key == "age");
+    CHECK(value == "30");
+
+    auto all = re.find_all("age:30 height:180");
+    CHECK(all.size() == 2);
+  }
+
+  SECTION("_re literal") {
+    auto re = R"((\w+):(\d+))"_re;
+    auto [m, whole, key, value] = re.find("age:30");
+    CHECK(m);
+    CHECK(key == "age");
+    CHECK(value == "30");
+  }
+}

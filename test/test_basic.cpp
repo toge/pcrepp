@@ -77,7 +77,7 @@ TEST_CASE("Basic usage from user example", "[basic]") {
 
         auto const target = "apple, banana, cherry"sv;
         auto parts = ctx.split(target);
-        
+
         REQUIRE(parts.size() == 3);
         CHECK(parts[0] == "apple");
         CHECK(parts[1] == "banana");

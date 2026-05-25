@@ -117,20 +117,6 @@ TEST_CASE("Zero-width matches", "[zero_width]") {
     }
 
     SECTION("split with capture groups (0-length)") {
-        // Many regex engines include capture groups in the split result.
-        // Let's see what pcrepp does.
-        // Actually, pcrepp's split implementation doesn't seem to include capture groups.
-        /*
-        for (auto& mr : find_all(target)) {
-          auto const start = mr.start_pos();
-          auto const end = mr.end_pos();
-          res.push_back(target.substr(last, start - last));
-          last = end;
-        }
-        res.push_back(target.substr(last));
-        */
-        // It only pushes the part before the match and the part after the last match.
-        // So capture groups are ignored in split.
         auto ctx_res = pcrepp::context<>::create(R"((,))");
         REQUIRE(ctx_res.has_value());
         auto const& ctx = *ctx_res;

@@ -861,6 +861,69 @@ auto find_all(std::string_view const target) -> std::vector<nttp_find_result_t<P
   return out;
 }
 
+/**
+ * @brief NTTP 版正規表現オブジェクト
+ *
+ * テンプレート引数で指定された正規表現のコンパイル結果を管理します。
+ * インスタンス化は軽量で、内部でコンパイル結果がキャッシュされます。
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+struct nttp_regex {
+  constexpr nttp_regex() = default;
+
+  /**
+   * @brief 最初のマッチを検索
+   */
+  auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) const {
+    return pcrepp::find<Pattern, UseJIT>(target, start, option);
+  }
+
+  /**
+   * @brief 全てのマッチを検索
+   */
+  auto find_all(std::string_view const target) const {
+    return pcrepp::find_all<Pattern, UseJIT>(target);
+  }
+
+  /**
+   * @brief 完全一致を確認
+   */
+  auto match(std::string_view const target, unsigned int const option = 0) const {
+    static auto const ctx_res = context<UseJIT>::create(Pattern.view());
+    if (not ctx_res) {
+      throw std::runtime_error{"NTTP match compile error: " + ctx_res.error()};
+    }
+    match_result mr;
+    auto const res = ctx_res->match(target, mr, option);
+    if (not res) {
+      throw std::runtime_error{"NTTP match error: " + res.error()};
+    }
+    return *res;
+  }
+};
+
+/**
+ * @brief NTTP 版正規表現のコンパイル
+ *
+ * @tparam Pattern 正規表現パターン
+ * @tparam UseJIT JITコンパイルを使用するか
+ * @return nttp_regex<Pattern, UseJIT> 正規表現オブジェクト
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+constexpr auto compile() {
+  return nttp_regex<Pattern, UseJIT>{};
+}
+
+/**
+ * @brief リテラル演算子 _re
+ *
+ * "pattern"_re と記述することで NTTP 版正規表現オブジェクトを生成します。
+ */
+template <fixed_string Pattern>
+constexpr auto operator""_re() {
+  return compile<Pattern>();
+}
+
 template <bool UseJIT>
 inline match_result::match_result(context<UseJIT> const& ctx) : match_result(ctx.code) {}
 
