@@ -15,6 +15,14 @@
 #include <type_traits>
 #include <vector>
 
+#if __has_include(<frozenchars.hpp>)
+#include <frozenchars.hpp>
+#define PCREPP_HAS_FROZENCHARS
+#elif __has_include(<frozenchars/frozenchars.hpp>)
+#include <frozenchars/frozenchars.hpp>
+#define PCREPP_HAS_FROZENCHARS
+#endif
+
 #include "fast_float/fast_float.h"
 
 #define PCRE2_CODE_UNIT_WIDTH 8
@@ -44,6 +52,34 @@ struct fixed_string {
     }
   }
 
+#ifdef PCREPP_HAS_FROZENCHARS
+  /**
+   * @brief コンストラクタ：frozenchars::FrozenString から初期化
+   */
+  template <size_t M>
+  constexpr fixed_string(frozenchars::FrozenString<M> const& src) {
+    static_assert(M <= N, "FrozenString is too large");
+    auto const s = src.sv();
+    for (auto i = 0uz; i < s.size(); ++i) {
+      value[i] = s[i];
+    }
+    value[s.size()] = '\0';
+  }
+
+  /**
+   * @brief コンストラクタ：frozenchars::FixedString から初期化
+   */
+  template <size_t M>
+  constexpr fixed_string(frozenchars::FixedString<M> const& src) {
+    static_assert(M <= N, "FixedString is too large");
+    auto const s = src.sv();
+    for (auto i = 0uz; i < s.size(); ++i) {
+      value[i] = s[i];
+    }
+    value[s.size()] = '\0';
+  }
+#endif
+
   /**
    * @brief 文字列を std::string_view に変換
    * @return null終端を除いた文字列ビュー
@@ -54,6 +90,24 @@ struct fixed_string {
 };
 template <size_t N>
 fixed_string(char const (&)[N]) -> fixed_string<N>;
+
+#ifdef PCREPP_HAS_FROZENCHARS
+/**
+ * @brief frozenchars::FrozenString を fixed_string に変換する
+ */
+template <size_t N>
+constexpr auto to_fixed_string(frozenchars::FrozenString<N> const& fs) {
+  return fixed_string<N>(fs);
+}
+
+/**
+ * @brief frozenchars::FixedString を fixed_string に変換する
+ */
+template <size_t N>
+constexpr auto to_fixed_string(frozenchars::FixedString<N> const& fs) {
+  return fixed_string<N>(fs);
+}
+#endif
 
 template <typename T>
 concept supported_integer_get_type =
