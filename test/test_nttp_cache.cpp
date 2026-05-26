@@ -23,9 +23,9 @@ TEST_CASE("NTTP find_all caching and compile API", "[nttp]") {
         auto target = std::string_view{"hello world"};
         auto results = re.find_all(target);
 
-        REQUIRE(results.size() == 2);
+        REQUIRE(std::ranges::distance(results) == 2);
 
-        auto [m1, g1_0, g1_1] = results[0];
+        auto [m1, g1_0, g1_1] = *results.begin();
         CHECK(m1);
         CHECK(g1_0 == "hello");
         CHECK(g1_1 == "hello");
@@ -34,8 +34,8 @@ TEST_CASE("NTTP find_all caching and compile API", "[nttp]") {
     SECTION("Using literal operator _re") {
         auto re = "(\\d+)"_re;
         auto results = re.find_all("123 456");
-        REQUIRE(results.size() == 2);
-        auto [m, g0, g1] = results[0];
+        REQUIRE(std::ranges::distance(results) == 2);
+        auto [m, g0, g1] = *results.begin();
         CHECK(m);
         CHECK(g0 == "123");
         CHECK(g1 == "123");

@@ -3,6 +3,7 @@
 #include <array>
 #include <charconv>
 #include <concepts>
+#include <cstring>
 #include <expected>
 #include <iterator>
 #include <memory>
@@ -32,6 +33,12 @@
 namespace pcrepp {
 
 /**
+ * @brief 高速化のためのオプション定数
+ * バリデーション済みの文字列を扱う場合に、PCRE2 による UTF チェックをスキップできます。
+ */
+inline constexpr unsigned int no_utf_check = PCRE2_NO_UTF_CHECK;
+
+/**
  * @struct fixed_string
  * @brief NTTP用のコンパイル時文字列ラッパー
  *
@@ -48,9 +55,7 @@ struct fixed_string {
    * @brief コンストラクタ：文字列リテラルから初期化
    */
   constexpr fixed_string(char const (&src)[N]) {
-    for (auto i = size_t{0}; i < N; ++i) {
-      value[i] = src[i];
-    }
+    std::ranges::copy(src, value.begin());
   }
 
 #ifdef PCREPP_HAS_FROZENCHARS
@@ -61,9 +66,7 @@ struct fixed_string {
   constexpr fixed_string(frozenchars::FrozenString<M> const& src) {
     static_assert(M <= N, "FrozenString is too large");
     auto const s = src.sv();
-    for (auto i = 0uz; i < s.size(); ++i) {
-      value[i] = s[i];
-    }
+    std::ranges::copy(s, value.begin());
     value[s.size()] = '\0';
   }
 
@@ -74,9 +77,7 @@ struct fixed_string {
   constexpr fixed_string(frozenchars::FixedString<M> const& src) {
     static_assert(M <= N, "FixedString is too large");
     auto const s = src.sv();
-    for (auto i = 0uz; i < s.size(); ++i) {
-      value[i] = s[i];
-    }
+    std::ranges::copy(s, value.begin());
     value[s.size()] = '\0';
   }
 #endif
@@ -86,7 +87,7 @@ struct fixed_string {
    * @return null終端を除いた文字列ビュー
    */
   constexpr auto view() const noexcept -> std::string_view {
-    return {value.data(), N - 1};
+    return {value.data(), N - 1uz};
   }
 };
 template <size_t N>
@@ -160,11 +161,11 @@ namespace detail {
  * @return 名前付きキャプチャグループなら true、それ以外は false
  */
 constexpr auto is_named_capture_after_question(std::string_view const pattern, size_t const open_paren_pos) noexcept -> bool {
-  auto const q_pos = open_paren_pos + 1;
+  auto const q_pos = open_paren_pos + 1uz;
   if (q_pos >= pattern.size() || pattern[q_pos] != '?') {
     return false;
   }
-  auto const marker_pos = q_pos + 1;
+  auto const marker_pos = q_pos + 1uz;
   if (marker_pos >= pattern.size()) {
     return false;
   }
@@ -172,13 +173,13 @@ constexpr auto is_named_capture_after_question(std::string_view const pattern, s
     return true;
   }
   if (pattern[marker_pos] == 'P') {
-    return marker_pos + 1 < pattern.size() && pattern[marker_pos + 1] == '<';
+    return marker_pos + 1uz < pattern.size() && pattern[marker_pos + 1uz] == '<';
   }
   if (pattern[marker_pos] == '<') {
-    if (marker_pos + 1 >= pattern.size()) {
+    if (marker_pos + 1uz >= pattern.size()) {
       return false;
     }
-    auto const next = pattern[marker_pos + 1];
+    auto const next = pattern[marker_pos + 1uz];
     return next != '=' && next != '!';
   }
   return false;
@@ -205,11 +206,12 @@ constexpr auto is_named_capture_after_question(std::string_view const pattern, s
  * @return キャプチャグループ数（ゼロ以上）
  */
 constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> size_t {
-  auto capture_count = size_t{0};
+  auto capture_count = 0uz;
   auto escaped = false;
   auto in_class = false;
+  auto class_start = false;
 
-  for (auto i = size_t{0}; i < pattern.size(); ++i) {
+  for (auto i = 0uz; i < pattern.size(); ++i) {
     auto const ch = pattern[i];
     if (escaped) {
       escaped = false;
@@ -220,19 +222,26 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
       continue;
     }
     if (in_class) {
-      if (ch == ']') {
+      if (ch == ']' && !class_start) {
         in_class = false;
       }
+      class_start = false;
       continue;
     }
     if (ch == '[') {
       in_class = true;
+      class_start = true;
+      if (i + 1uz < pattern.size() && pattern[i + 1uz] == '^') {
+        class_start = false; // [^] も [^...] と同様に最初の ] をリテラルとして扱う必要があるため、次の文字で判定する
+        ++i;
+        class_start = true;
+      }
       continue;
     }
     if (ch != '(') {
       continue;
     }
-    if (i + 1 >= pattern.size() || pattern[i + 1] != '?') {
+    if (i + 1uz >= pattern.size() || pattern[i + 1uz] != '?') {
       ++capture_count;
       continue;
     }
@@ -318,7 +327,40 @@ auto parse_floating(std::string_view const sv) noexcept -> T {
   }
   return {};
 }
+
+struct tls_match_data_cache {
+  pcre2_match_data* data           = nullptr;
+  uint32_t          capture_count = 0;
+
+  ~tls_match_data_cache() {
+    if (data) {
+      pcre2_match_data_free(data);
+    }
+  }
+
+  auto get(pcre2_code const* code) -> pcre2_match_data* {
+    auto cc = uint32_t{};
+    pcre2_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &cc);
+    if (not data || cc > capture_count) {
+      if (data) {
+        pcre2_match_data_free(data);
+      }
+      data          = pcre2_match_data_create_from_pattern(code, nullptr);
+      capture_count = cc;
+    }
+    return data;
+  }
+};
+
+inline auto get_tls_match_data(pcre2_code const* code) -> pcre2_match_data* {
+  static thread_local tls_match_data_cache cache;
+  return cache.get(code);
+}
 }  // namespace detail
+
+struct use_tls_t {};
+inline constexpr auto use_tls = use_tls_t{};
+
 
 template <bool UseJIT>
 struct iterator;
@@ -355,6 +397,32 @@ struct match_result {
   match_result() = default;
   template <bool UseJIT>
   match_result(context<UseJIT> const& ctx);
+
+  match_result(match_result const& other) {
+    if (other.holder && other.holder->code) {
+      holder = std::make_shared<data_holder>(other.holder->code);
+      auto const count = pcre2_get_ovector_count(other.holder->data);
+      std::memcpy(holder->ovector, other.holder->ovector, sizeof(size_t) * count * 2uz);
+      holder->target = other.holder->target;
+    }
+  }
+
+  auto operator=(match_result const& other) -> match_result& {
+    if (this != &other) {
+      if (other.holder && other.holder->code) {
+        holder = std::make_shared<data_holder>(other.holder->code);
+        auto const count = pcre2_get_ovector_count(other.holder->data);
+        std::memcpy(holder->ovector, other.holder->ovector, sizeof(size_t) * count * 2uz);
+        holder->target = other.holder->target;
+      } else {
+        holder.reset();
+      }
+    }
+    return *this;
+  }
+
+  match_result(match_result&&) noexcept = default;
+  auto operator=(match_result&&) noexcept -> match_result& = default;
 
   /**
    * @brief 指定したインデックスのグループ文字列を取得する
@@ -404,7 +472,7 @@ struct match_result {
     using reference         = value_type&;
 
     match_result const* res   = nullptr;
-    size_t index = 0;
+    size_t index = 0uz;
 
     auto operator++() noexcept -> group_iterator& {
       ++index;
@@ -414,19 +482,28 @@ struct match_result {
     auto operator==(group_iterator const& other) const noexcept -> bool { return index == other.index; }
   };
 
-  auto begin() const -> group_iterator { return {this, 0}; }
+  auto begin() const -> group_iterator { return {this, 0uz}; }
   auto end() const -> group_iterator { return {this, size()}; }
 
-  auto start_pos() const noexcept -> size_t { return holder ? holder->ovector[0] : 0; }
-  auto end_pos()   const noexcept -> size_t { return holder ? holder->ovector[1] : 0; }
+  auto start_pos() const noexcept -> size_t { return holder ? holder->ovector[0] : 0uz; }
+  auto end_pos()   const noexcept -> size_t { return holder ? holder->ovector[1] : 0uz; }
 
 private:
+  match_result(pcre2_code const* code, pcre2_match_data* src_data, std::string_view target) {
+    if (code && src_data) {
+      holder = std::make_shared<data_holder>(code);
+      auto const count = pcre2_get_ovector_count(src_data);
+      std::memcpy(holder->ovector, pcre2_get_ovector_pointer(src_data), sizeof(size_t) * count * 2uz);
+      holder->target = target;
+    }
+  }
+
   auto get_view(size_t const index) const noexcept -> std::string_view {
     if (not holder || not holder->data || index >= pcre2_get_ovector_count(holder->data)) {
       return {};
     }
-    auto const s = holder->ovector[index * 2 + 0];
-    auto const e = holder->ovector[index * 2 + 1];
+    auto const s = holder->ovector[index * 2uz + 0uz];
+    auto const e = holder->ovector[index * 2uz + 1uz];
     if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
       return {};
     }
@@ -486,15 +563,16 @@ auto match_result_to_tuple(match_result const& mr) -> nttp_match_tuple_t<N> {
  */
 template <bool UseJIT>
 struct iterator {
+  using iterator_concept  = std::forward_iterator_tag;
   using iterator_category = std::forward_iterator_tag;
   using value_type        = match_result;
   using difference_type   = std::ptrdiff_t;
-  using pointer           = value_type*;
-  using reference         = value_type&;
+  using pointer           = match_result const*;
+  using reference         = match_result const&;
 
   context<UseJIT> const* ctx = nullptr;
   std::string_view target = {};
-  size_t pos = 0;
+  size_t pos = 0uz;
   bool is_end = true;
   match_result result;
 
@@ -507,13 +585,30 @@ struct iterator {
     ++(*this);
     return tmp;
   }
-  auto operator*() -> match_result& { return result; }
+  auto operator*() const -> match_result const& { return result; }
+  auto operator->() const -> match_result const* { return &result; }
   auto operator==(iterator const& other) const -> bool {
     if (is_end && other.is_end) {
       return true;
     }
     return is_end == other.is_end && ctx == other.ctx && pos == other.pos;
   }
+};
+
+/**
+ * @struct match_range
+ * @brief match_result を巡回するための view
+ */
+template <bool UseJIT>
+struct match_range : std::ranges::view_interface<match_range<UseJIT>> {
+  iterator<UseJIT> first;
+  iterator<UseJIT> last;
+
+  match_range() = default;
+  match_range(iterator<UseJIT> f, iterator<UseJIT> l) : first(f), last(l) {}
+
+  constexpr auto begin() const { return first; }
+  constexpr auto end() const { return last; }
 };
 
 /**
@@ -529,7 +624,7 @@ private:
 public:
   context() = default;
   context(std::string_view const src, unsigned int option = 0) {
-    if (auto res = compile(src, option); !res) {
+    if (auto const res = compile(src, option); !res) {
       throw std::runtime_error{res.error()};
     }
   }
@@ -540,7 +635,7 @@ public:
    */
   static auto create(std::string_view const src, unsigned int option = 0) -> std::expected<context<UseJIT>, std::string> {
     auto ctx = context<UseJIT>{};
-    if (auto res = ctx.compile(src, option); not res) {
+    if (auto const res = ctx.compile(src, option); not res) {
       return std::unexpected{res.error()};
     }
     return ctx;
@@ -558,6 +653,11 @@ public:
     }
     return *this;
   }
+
+  /**
+   * @brief コンパイル済みの pcre2_code へのポインタを取得
+   */
+  auto get_code() const noexcept -> pcre2_code const* { return code; }
 
   /**
    * @brief 正規表現オブジェクトを解放する
@@ -583,9 +683,9 @@ public:
 
     auto ec = 0;
     auto eo = PCRE2_SIZE{};
-    auto c  = pcre2_compile(reinterpret_cast<PCRE2_SPTR8>(src.data()), src.size(), option, &ec, &eo, nullptr);
+    auto const c  = pcre2_compile(reinterpret_cast<PCRE2_SPTR8>(src.data()), src.size(), option, &ec, &eo, nullptr);
     if (not c) {
-      auto msg = std::array<PCRE2_UCHAR8, 256>{};
+      auto msg = std::array<PCRE2_UCHAR8, 256uz>{};
       pcre2_get_error_message(ec, msg.data(), msg.size());
       return std::unexpected{"Compile error at offset " + std::to_string(eo) + ": " + reinterpret_cast<char const*>(msg.data())};
     }
@@ -610,27 +710,26 @@ public:
   }
 
   /**
-   * @brief 文字列に対して正規表現を検索し、マッチ結果をmatch_resultオブジェクトに格納する
+   * @brief 文字列に対して正規表現を検索し、マッチ結果を低レベルな pcre2_match_data に格納する
    *
    * @param target 検索対象の文字列
-   * @param mr マッチ結果を格納するオブジェクト
+   * @param data マッチデータを格納するバッファ
    * @param start 検索開始位置
-   * @param option 検索オプション (PCRE2_NOTEMPTYなど)
+   * @param option 検索オプション
    * @return std::expected<int, std::string> マッチしたグループ数、マッチしなかった場合は0、エラーの場合はエラーメッセージを返す
    */
-  auto find(std::string_view const target, match_result& mr, size_t start = 0, unsigned int option = 0) const -> std::expected<int, std::string> {
+  auto find(std::string_view const target, pcre2_match_data* data, size_t const start = 0uz, unsigned int const option = 0) const -> std::expected<int, std::string> {
     if (not code) {
       return std::unexpected{"Not compiled."};
     }
-    if (not mr.holder) {
-      return std::unexpected{"match_result not initialized."};
+    if (not data) {
+      return std::unexpected{"Match data is null."};
     }
-    mr.set_target(target);
-    auto rc = [&] -> int {
+    auto const rc = [&] -> int {
       if constexpr (UseJIT) {
-        return pcre2_jit_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, mr.get_data(), nullptr);
+        return pcre2_jit_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, nullptr);
       } else {
-        return pcre2_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, mr.get_data(), nullptr);
+        return pcre2_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, nullptr);
       }
     }();
     if (rc >= 0) {
@@ -643,6 +742,41 @@ public:
   }
 
   /**
+   * @brief 文字列に対して正規表現を検索し、マッチ結果をmatch_resultオブジェクトに格納する
+   *
+   * @param target 検索対象の文字列
+   * @param mr マッチ結果を格納するオブジェクト
+   * @param start 検索開始位置
+   * @param option 検索オプション (PCRE2_NOTEMPTYなど)
+   * @return std::expected<int, std::string> マッチしたグループ数、マッチしなかった場合は0、エラーの場合はエラーメッセージを返す
+   */
+  auto find(std::string_view const target, match_result& mr, size_t const start = 0uz, unsigned int const option = 0) const -> std::expected<int, std::string> {
+    if (not mr.holder) {
+      return std::unexpected{"match_result not initialized."};
+    }
+    mr.set_target(target);
+    return find(target, mr.get_data(), start, option);
+  }
+
+  /**
+   * @brief スレッドローカルなバッファを再利用して検索を行う（マッチ結果はコピーされる）
+   */
+  auto find(std::string_view const target, use_tls_t, size_t const start = 0uz, unsigned int const option = 0) const -> std::expected<match_result, std::string> {
+    if (not code) {
+      return std::unexpected{"Not compiled."};
+    }
+    auto* md = detail::get_tls_match_data(code);
+    auto const rc = find(target, md, start, option);
+    if (not rc) {
+      return std::unexpected{rc.error()};
+    }
+    if (*rc <= 0) {
+      return match_result{};
+    }
+    return match_result{code, md, target};
+  }
+
+  /**
    * @brief 文字列に対して正規表現を検索し、最初のマッチ結果を返す
    *
    * @param target 検索対象の文字列
@@ -650,7 +784,7 @@ public:
    * @param option 検索オプション (PCRE2_NOTEMPTYなど)
    * @return std::expected<match_result, std::string> マッチした場合はmatch_result、マッチしなかった場合は空のmatch_result、エラーの場合はエラーメッセージを返す
    */
-  auto find(std::string_view const target, size_t start = 0, unsigned int option = 0) const -> std::expected<match_result, std::string> {
+  auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) const -> std::expected<match_result, std::string> {
     auto mr = match_result{*this};
     auto const rc = find(target, mr, start, option);
     if (not rc) {
@@ -670,8 +804,8 @@ public:
    * @param option マッチオプション
    * @return std::expected<bool, std::string> 完全一致する場合はtrue、それ以外はfalse
    */
-  auto match(std::string_view const target, match_result& mr, unsigned int option = 0) const noexcept -> std::expected<bool, std::string> {
-    auto const rc = find(target, mr, 0, option | PCRE2_ANCHORED | PCRE2_ENDANCHORED);
+  auto match(std::string_view const target, match_result& mr, unsigned int const option = 0) const noexcept -> std::expected<bool, std::string> {
+    auto const rc = find(target, mr, 0uz, option | PCRE2_ANCHORED | PCRE2_ENDANCHORED);
     if (not rc) {
       return std::unexpected{rc.error()};
     }
@@ -686,17 +820,17 @@ public:
    * @param option 置換オプション
    * @return std::expected<std::string, std::string> 置換後の文字列
    */
-  auto replace(std::string_view const target, std::string_view const replacement, unsigned int option = PCRE2_SUBSTITUTE_GLOBAL) const noexcept -> std::expected<std::string, std::string> {
+  auto replace(std::string_view const target, std::string_view const replacement, unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL) const noexcept -> std::expected<std::string, std::string> {
     if (not code) {
       return std::unexpected{"Not compiled."};
     }
-    auto outlen = target.size() + replacement.size() + 1024;
+    auto outlen = target.size() + replacement.size() + 1024uz;
     auto buffer = std::string(outlen, '\0');
     auto blen   = outlen;
     auto const rc = pcre2_substitute(
       code,
       reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(),
-      0,
+      0uz,
       option,
       nullptr,
       nullptr,
@@ -714,7 +848,7 @@ public:
       auto const rc2 = pcre2_substitute(
         code,
         reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(),
-        0,
+        0uz,
         option,
         nullptr,
         nullptr,
@@ -740,6 +874,7 @@ public:
     requires std::invocable<F, match_result const&>
   auto replace(std::string_view const target, F&& callback) const -> std::string {
     auto result = std::string{};
+    result.reserve(target.size());
 
     auto last_pos = 0uz;
     for (auto& mr : find_all(target)) {
@@ -761,10 +896,10 @@ public:
    * @brief 全てのマッチ箇所をイテレートするためのrangeを返す
    *
    * @param target 検索対象の文字列
-   * @return std::ranges::subrange<iterator<UseJIT>>
+   * @return match_range<UseJIT>
    */
-  auto find_all(std::string_view const target) const noexcept -> std::ranges::subrange<iterator<UseJIT>> {
-    return {iterator<UseJIT>(this, target, 0, false), iterator<UseJIT>(this, target, 0, true)};
+  auto find_all(std::string_view const target) const noexcept -> match_range<UseJIT> {
+    return {iterator<UseJIT>(this, target, 0uz, false), iterator<UseJIT>(this, target, 0uz, true)};
   }
 
   /**
@@ -776,7 +911,7 @@ public:
   auto split(std::string_view const target) const noexcept -> std::vector<std::string_view> {
     auto res  = std::vector<std::string_view>{};
 
-    auto last = size_t{0};
+    auto last = 0uz;
     for (auto& mr : find_all(target)) {
       auto const start = mr.start_pos();
       auto const end = mr.end_pos();
@@ -796,7 +931,7 @@ public:
  * @tparam Pattern NTTP として指定された正規表現パターン
  */
 template <fixed_string Pattern>
-inline constexpr auto nttp_group_count_v = detail::count_capture_groups(Pattern.view()) + 1;
+inline constexpr auto nttp_group_count_v = detail::count_capture_groups(Pattern.view()) + 1uz;
 
 /**
  * @brief NTTP 版 find の戻り値オブジェクト
@@ -817,11 +952,11 @@ struct nttp_match_result {
 
   template <size_t Index>
   auto get() const noexcept {
-    static_assert(Index < (nttp_group_count_v<Pattern> + 1));
-    if constexpr (Index == 0) {
+    static_assert(Index < (nttp_group_count_v<Pattern> + 1uz));
+    if constexpr (Index == 0uz) {
       return matched;
     } else {
-      return groups[Index - 1];
+      return groups[Index - 1uz];
     }
   }
 
@@ -865,6 +1000,29 @@ template <fixed_string Pattern, bool UseJIT>
 auto make_nttp_result(match_result const& mr) -> nttp_find_result_t<Pattern, UseJIT> {
   return make_nttp_result_impl<Pattern, UseJIT>(mr, std::make_index_sequence<nttp_group_count_v<Pattern>>{});
 }
+
+template <fixed_string Pattern, bool UseJIT, size_t... Is>
+auto make_nttp_result_raw_impl(pcre2_match_data* md, std::string_view target, std::index_sequence<Is...>) -> nttp_find_result_t<Pattern, UseJIT> {
+  auto const* ovector = pcre2_get_ovector_pointer(md);
+  auto const  count   = pcre2_get_ovector_count(md);
+  auto const  get_view = [&](size_t const i) -> std::string_view {
+    if (i >= count) {
+      return {};
+    }
+    auto const s = ovector[i * 2uz + 0uz];
+    auto const e = ovector[i * 2uz + 1uz];
+    if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
+      return {};
+    }
+    return target.substr(s, e - s);
+  };
+  return {.matched = true, .groups = {get_view(Is)...}};
+}
+
+template <fixed_string Pattern, bool UseJIT>
+auto make_nttp_result_raw(pcre2_match_data* md, std::string_view target) -> nttp_find_result_t<Pattern, UseJIT> {
+  return make_nttp_result_raw_impl<Pattern, UseJIT>(md, target, std::make_index_sequence<nttp_group_count_v<Pattern>>{});
+}
 }  // namespace detail
 
 /**
@@ -872,7 +1030,7 @@ auto make_nttp_result(match_result const& mr) -> nttp_find_result_t<Pattern, Use
  */
 template <size_t Index, fixed_string Pattern, bool UseJIT>
 auto get(nttp_match_result<Pattern, UseJIT> const& result) noexcept {
-  static_assert(Index < (nttp_group_count_v<Pattern> + 1));
+  static_assert(Index < (nttp_group_count_v<Pattern> + 1uz));
   return result.template get<Index>();
 }
 
@@ -883,37 +1041,36 @@ auto get(nttp_match_result<Pattern, UseJIT> const& result) noexcept {
  * パターンコンパイルやマッチ実行で失敗した場合は std::runtime_error を送出します。
  */
 template <fixed_string Pattern, bool UseJIT = true>
-auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) -> nttp_find_result_t<Pattern, UseJIT> {
+auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) -> nttp_find_result_t<Pattern, UseJIT> {
   static auto const ctx_res = context<UseJIT>::create(Pattern.view());
   if (not ctx_res) {
     throw std::runtime_error{"NTTP find compile error: " + ctx_res.error()};
   }
   auto const& ctx = *ctx_res;
-  auto const res = ctx.find(target, start, option);
+  auto*       md  = detail::get_tls_match_data(ctx.get_code());
+  auto const  res = ctx.find(target, md, start, option);
   if (not res) {
     throw std::runtime_error{"NTTP find match error: " + res.error()};
   }
-  if (not *res) {
+  if (*res <= 0) {
     return {};
   }
-  return detail::make_nttp_result<Pattern, UseJIT>(*res);
+  return detail::make_nttp_result_raw<Pattern, UseJIT>(md, target);
 }
 
 /**
  * @brief NTTP 版 find_all：正規表現をテンプレート引数で指定する全マッチ検索
  */
 template <fixed_string Pattern, bool UseJIT = true>
-auto find_all(std::string_view const target) -> std::vector<nttp_find_result_t<Pattern, UseJIT>> {
+auto find_all(std::string_view const target) {
   static auto const ctx_res = context<UseJIT>::create(Pattern.view());
   if (not ctx_res) {
     throw std::runtime_error{"NTTP find_all compile error: " + ctx_res.error()};
   }
   auto const& ctx = *ctx_res;
-  auto out = std::vector<nttp_find_result_t<Pattern, UseJIT>>{};
-  for (auto const& mr : ctx.find_all(target)) {
-    out.push_back(detail::make_nttp_result<Pattern, UseJIT>(mr));
-  }
-  return out;
+  return ctx.find_all(target) | std::views::transform([](auto const& mr) {
+    return detail::make_nttp_result<Pattern, UseJIT>(mr);
+  });
 }
 
 /**
@@ -929,7 +1086,7 @@ struct nttp_regex {
   /**
    * @brief 最初のマッチを検索
    */
-  auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) const {
+  auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) const {
     return pcrepp::find<Pattern, UseJIT>(target, start, option);
   }
 
@@ -985,7 +1142,7 @@ constexpr auto operator""_re() {
  * @brief frozenchars::FrozenString 版 find
  */
 template <frozenchars::FrozenString Pattern, bool UseJIT = true>
-auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) {
+auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) {
   return find<to_fixed_string(Pattern), UseJIT>(target, start, option);
 }
 
@@ -993,7 +1150,7 @@ auto find(std::string_view const target, size_t const start = 0, unsigned int co
  * @brief frozenchars::FixedString 版 find
  */
 template <frozenchars::FixedString Pattern, bool UseJIT = true>
-auto find(std::string_view const target, size_t const start = 0, unsigned int const option = 0) {
+auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) {
   return find<to_fixed_string(Pattern), UseJIT>(target, start, option);
 }
 
@@ -1047,7 +1204,7 @@ template <bool UseJIT>
 inline auto iterator<UseJIT>::operator++() -> iterator& {
   if (ctx && not is_end) {
     auto const prev_end = result.end_pos();
-    auto const next_pos = (prev_end == pos) ? pos + 1 : prev_end;  // ゼロ長マッチ対策
+    auto const next_pos = (prev_end == pos) ? pos + 1uz : prev_end;  // ゼロ長マッチ対策
     pos = next_pos;
     if (pos > target.size()) {
       is_end = true;
@@ -1065,12 +1222,12 @@ inline auto iterator<UseJIT>::operator++() -> iterator& {
 namespace std {
 template <pcrepp::fixed_string Pattern, bool UseJIT>
 struct tuple_size<pcrepp::nttp_match_result<Pattern, UseJIT>>
-  : integral_constant<size_t, pcrepp::nttp_group_count_v<Pattern> + 1> {};
+  : integral_constant<size_t, pcrepp::nttp_group_count_v<Pattern> + 1uz> {};
 
 template <size_t Index, pcrepp::fixed_string Pattern, bool UseJIT>
 struct tuple_element<Index, pcrepp::nttp_match_result<Pattern, UseJIT>> {
-  static_assert(Index < pcrepp::nttp_group_count_v<Pattern> + 1);
-  using type = conditional_t<Index == 0, bool, std::string_view>;
+  static_assert(Index < pcrepp::nttp_group_count_v<Pattern> + 1uz);
+  using type = conditional_t<Index == 0uz, bool, std::string_view>;
 };
 }  // namespace std
 
@@ -1086,14 +1243,14 @@ struct std::formatter<pcrepp::match_result> : std::formatter<std::string_view> {
     if (not res) {
       return std::format_to(ctx.out(), "No Match");
     }
-    auto buf = std::string{"["};
+    std::format_to(ctx.out(), "[");
     for (auto i = 0uz; i < res.size(); ++i) {
-      if (i > 0)
-        buf += ", ";
-      buf += res.get(i);
+      if (i > 0uz) {
+        std::format_to(ctx.out(), ", ");
+      }
+      std::format_to(ctx.out(), "{}", res.get(i));
     }
-    buf += "]";
-    return std::formatter<std::string_view>::format(buf, ctx);
+    return std::format_to(ctx.out(), "]");
   }
 };
 

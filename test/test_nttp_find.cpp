@@ -37,14 +37,16 @@ TEST_CASE("NTTP find returns false result when no match", "[nttp_find]") {
 
 TEST_CASE("NTTP find_all returns result vector", "[nttp_find]") {
   auto const all = pcrepp::find_all<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180");
-  REQUIRE(all.size() == 2);
+  REQUIRE(std::ranges::distance(all) == 2);
 
-  auto const& r1 = all[0];
+  auto it = all.begin();
+  auto const& r1 = *it;
   CHECK(r1);
   CHECK(r1.get<"key">() == "age");
   CHECK(r1.get<"value">() == "30");
 
-  auto const [m2, whole2, key2, value2] = all[1];
+  ++it;
+  auto const [m2, whole2, key2, value2] = *it;
   CHECK(m2);
   CHECK(whole2 == "height:180");
   CHECK(key2 == "height");
@@ -66,7 +68,7 @@ TEST_CASE("NTTP compile and _re literal", "[nttp_find]") {
     CHECK(value == "30");
 
     auto all = re.find_all("age:30 height:180");
-    CHECK(all.size() == 2);
+    CHECK(std::ranges::distance(all) == 2);
   }
 
   SECTION("_re literal") {
