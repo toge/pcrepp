@@ -69,17 +69,6 @@ struct fixed_string {
     std::ranges::copy(s, value.begin());
     value[s.size()] = '\0';
   }
-
-  /**
-   * @brief コンストラクタ：frozenchars::FixedString から初期化
-   */
-  template <size_t M>
-  constexpr fixed_string(frozenchars::FixedString<M> const& src) {
-    static_assert(M <= N, "FixedString is too large");
-    auto const s = src.sv();
-    std::ranges::copy(s, value.begin());
-    value[s.size()] = '\0';
-  }
 #endif
 
   /**
@@ -99,14 +88,6 @@ fixed_string(char const (&)[N]) -> fixed_string<N>;
  */
 template <size_t N>
 constexpr auto to_fixed_string(frozenchars::FrozenString<N> const& fs) {
-  return fixed_string<N>(fs);
-}
-
-/**
- * @brief frozenchars::FixedString を fixed_string に変換する
- */
-template <size_t N>
-constexpr auto to_fixed_string(frozenchars::FixedString<N> const& fs) {
   return fixed_string<N>(fs);
 }
 #endif
@@ -1147,14 +1128,6 @@ auto find(std::string_view const target, size_t const start = 0uz, unsigned int 
 }
 
 /**
- * @brief frozenchars::FixedString 版 find
- */
-template <frozenchars::FixedString Pattern, bool UseJIT = true>
-auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) {
-  return find<to_fixed_string(Pattern), UseJIT>(target, start, option);
-}
-
-/**
  * @brief frozenchars::FrozenString 版 find_all
  */
 template <frozenchars::FrozenString Pattern, bool UseJIT = true>
@@ -1163,25 +1136,9 @@ auto find_all(std::string_view const target) {
 }
 
 /**
- * @brief frozenchars::FixedString 版 find_all
- */
-template <frozenchars::FixedString Pattern, bool UseJIT = true>
-auto find_all(std::string_view const target) {
-  return find_all<to_fixed_string(Pattern), UseJIT>(target);
-}
-
-/**
  * @brief frozenchars::FrozenString 版 compile
  */
 template <frozenchars::FrozenString Pattern, bool UseJIT = true>
-constexpr auto compile() {
-  return compile<to_fixed_string(Pattern), UseJIT>();
-}
-
-/**
- * @brief frozenchars::FixedString 版 compile
- */
-template <frozenchars::FixedString Pattern, bool UseJIT = true>
 constexpr auto compile() {
   return compile<to_fixed_string(Pattern), UseJIT>();
 }
