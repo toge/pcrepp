@@ -27,6 +27,12 @@
 
 #include "fast_float/fast_float.h"
 
+// 文字列リテラル NTTP（find<"a+"> など）との曖昧性回避のため、
+// frozenchars の同名オーバーロードはデフォルト無効にする。
+#ifndef PCREPP_ENABLE_FROZENCHARS_NTTP_OVERLOADS
+#define PCREPP_ENABLE_FROZENCHARS_NTTP_OVERLOADS 0
+#endif
+
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include "pcre2.h"
 
@@ -1120,28 +1126,54 @@ constexpr auto operator""_re() {
 // frozenchars ライブラリが利用可能な場合、テンプレート引数に指定可能にする
 #ifdef PCREPP_HAS_FROZENCHARS
 /**
- * @brief frozenchars::FrozenString 版 find
+ * @brief frozenchars::FrozenString 版 find（明示API）
  */
 template <frozenchars::FrozenString Pattern, bool UseJIT = true>
-auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) {
+auto find_frozen(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) {
   return find<to_fixed_string(Pattern), UseJIT>(target, start, option);
 }
 
 /**
- * @brief frozenchars::FrozenString 版 find_all
+ * @brief frozenchars::FrozenString 版 find_all（明示API）
  */
 template <frozenchars::FrozenString Pattern, bool UseJIT = true>
-auto find_all(std::string_view const target) {
+auto find_all_frozen(std::string_view const target) {
   return find_all<to_fixed_string(Pattern), UseJIT>(target);
 }
 
 /**
- * @brief frozenchars::FrozenString 版 compile
+ * @brief frozenchars::FrozenString 版 compile（明示API）
+ */
+template <frozenchars::FrozenString Pattern, bool UseJIT = true>
+constexpr auto compile_frozen() {
+  return compile<to_fixed_string(Pattern), UseJIT>();
+}
+
+#if PCREPP_ENABLE_FROZENCHARS_NTTP_OVERLOADS
+/**
+ * @brief frozenchars::FrozenString 版 find（同名オーバーロード）
+ */
+template <frozenchars::FrozenString Pattern, bool UseJIT = true>
+auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) {
+  return find_frozen<Pattern, UseJIT>(target, start, option);
+}
+
+/**
+ * @brief frozenchars::FrozenString 版 find_all（同名オーバーロード）
+ */
+template <frozenchars::FrozenString Pattern, bool UseJIT = true>
+auto find_all(std::string_view const target) {
+  return find_all_frozen<Pattern, UseJIT>(target);
+}
+
+/**
+ * @brief frozenchars::FrozenString 版 compile（同名オーバーロード）
  */
 template <frozenchars::FrozenString Pattern, bool UseJIT = true>
 constexpr auto compile() {
-  return compile<to_fixed_string(Pattern), UseJIT>();
+  return compile_frozen<Pattern, UseJIT>();
 }
+#endif
 #endif // PCREPP_HAS_FROZENCHARS
 
 template <bool UseJIT>

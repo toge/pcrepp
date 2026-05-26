@@ -57,6 +57,13 @@ TEST_CASE("NTTP find throws on invalid pattern", "[nttp_find]") {
   CHECK_THROWS_AS((void)pcrepp::find<"(">("x"), std::runtime_error);
 }
 
+TEST_CASE("NTTP find accepts string literal template argument", "[nttp_find]") {
+  static_assert(requires { pcrepp::find<"a+">("aaaa"); });
+  auto const res = pcrepp::find<"a+">("aaaa");
+  CHECK(res);
+  CHECK(res.get<1>() == "aaaa");
+}
+
 TEST_CASE("NTTP compile and _re literal", "[nttp_find]") {
   using namespace pcrepp;
 
