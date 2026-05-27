@@ -56,12 +56,15 @@ inline constexpr unsigned int no_utf_check = PCRE2_NO_UTF_CHECK;
 template <size_t N>
 struct fixed_string {
   std::array<char, N> value{};
+  size_t length = (N > 0uz ? N - 1uz : 0uz);
 
   /**
    * @brief コンストラクタ：文字列リテラルから初期化
    */
   constexpr fixed_string(char const (&src)[N]) {
+    static_assert(N > 0uz, "fixed_string requires N > 0");
     std::ranges::copy(src, value.begin());
+    length = N - 1uz;
   }
 
 #ifdef PCREPP_HAS_FROZENCHARS
@@ -70,10 +73,19 @@ struct fixed_string {
    */
   template <size_t M>
   constexpr fixed_string(frozenchars::FrozenString<M> const& src) {
-    static_assert(M <= N, "FrozenString is too large");
+    static_assert(M <= N, "FrozenString capacity is too large");
     auto const s = src.sv();
-    std::ranges::copy(s, value.begin());
+    if (s.size() >= N) {
+      // 念のため終端NUL分を残して切り詰め
+      std::ranges::copy(s.substr(0uz, N - 1uz), value.begin());
+      value[N - 1uz] = '\0';
+      length = N - 1uz;
+      return;
+    }
+
+    std::ranges::copy(s.begin(), s.end(), value.begin());
     value[s.size()] = '\0';
+    length = s.size();
   }
 #endif
 
@@ -82,7 +94,7 @@ struct fixed_string {
    * @return null終端を除いた文字列ビュー
    */
   constexpr auto view() const noexcept -> std::string_view {
-    return {value.data(), N - 1uz};
+    return {value.data(), length};
   }
 };
 template <size_t N>
@@ -200,19 +212,29 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
 
   for (auto i = 0uz; i < pattern.size(); ++i) {
     auto const ch = pattern[i];
+    if (in_class) {
+      if (escaped) {
+        escaped = false;
+        class_start = false;
+        continue;
+      }
+      if (ch == '\\') {
+        escaped = true;
+        class_start = false;
+        continue;
+      }
+      if (ch == ']' && !class_start) {
+        in_class = false;
+      }
+      class_start = false;
+      continue;
+    }
     if (escaped) {
       escaped = false;
       continue;
     }
     if (ch == '\\') {
       escaped = true;
-      continue;
-    }
-    if (in_class) {
-      if (ch == ']' && !class_start) {
-        in_class = false;
-      }
-      class_start = false;
       continue;
     }
     if (ch == '[') {
@@ -269,7 +291,7 @@ using string_view_tuple_t = decltype(make_repeated_tuple_type_impl<std::string_v
  * @tparam N キャプチャグループ数
  */
 template <size_t N>
-using nttp_match_tuple_t = decltype(std::tuple_cat(std::tuple<bool>{}, std::declval<string_view_tuple_t<N>>()));
+using nttp_match_tuple_t = string_view_tuple_t<N>;
 
 /**
  * @brief マッチなしを表す空のタプルを生成（内部実装用）
@@ -278,16 +300,16 @@ using nttp_match_tuple_t = decltype(std::tuple_cat(std::tuple<bool>{}, std::decl
  */
 template <size_t N, size_t... Is>
 constexpr auto make_empty_match_tuple_impl(std::index_sequence<Is...>) noexcept -> nttp_match_tuple_t<N> {
-  return std::tuple_cat(std::make_tuple(false), std::make_tuple((static_cast<void>(Is), std::string_view{})...));
+  return std::make_tuple((static_cast<void>(Is), std::string_view{})...);
 }
 
 /**
  * @brief マッチなしを表す空のタプルを生成
  *
- * マッチが失敗した場合に bool=false で初期化された全要素を返します。
+ * マッチが失敗した場合に空の全要素を返します。
  *
- * @tparam N タプルの要素数（bool + キャプチャ数）
- * @return bool(false) + N個の空の std::string_view を含むタプル
+ * @tparam N タプルの要素数（全体マッチ + キャプチャ数）
+ * @return N個の空の std::string_view を含むタプル
  */
 template <size_t N>
 constexpr auto make_empty_match_tuple() noexcept -> nttp_match_tuple_t<N> {
@@ -521,22 +543,22 @@ namespace detail {
  *
  * match_result の各キャプチャグループを std::get<> でアクセス可能なタプルに変換します。
  *
- * @tparam N タプルの要素数（bool + キャプチャ数）
+ * @tparam N タプルの要素数（全体マッチ + キャプチャ数）
  * @tparam Is インデックスシーケンス
  * @param mr マッチ結果
- * @return bool(true) + 全体マッチ + 各キャプチャグループを含むタプル
+ * @return 全体マッチ + 各キャプチャグループを含むタプル
  */
 template <size_t N, size_t... Is>
 auto match_result_to_tuple_impl(match_result const& mr, std::index_sequence<Is...>) -> nttp_match_tuple_t<N> {
-  return std::tuple_cat(std::make_tuple(static_cast<bool>(mr)), std::make_tuple(mr.get(Is)...));
+  return std::make_tuple(mr.get(Is)...);
 }
 
 /**
  * @brief match_result をタプルに変換（パブリック用）
  *
- * @tparam N タプルの要素数（bool + キャプチャ数）
+ * @tparam N タプルの要素数（全体マッチ + キャプチャ数）
  * @param mr マッチ結果
- * @return bool(マッチ成功) + 全体マッチ + 各キャプチャグループを含むタプル
+ * @return 全体マッチ + 各キャプチャグループを含むタプル
  */
 template <size_t N>
 auto match_result_to_tuple(match_result const& mr) -> nttp_match_tuple_t<N> {
@@ -1056,7 +1078,7 @@ auto find_all(std::string_view const target) {
   }
   auto const& ctx = *ctx_res;
   return ctx.find_all(target) | std::views::transform([](auto const& mr) {
-    return detail::make_nttp_result<Pattern, UseJIT>(mr);
+    return detail::match_result_to_tuple<nttp_group_count_v<Pattern>>(mr);
   });
 }
 

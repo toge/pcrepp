@@ -10,8 +10,7 @@ TEST_CASE("NTTP find_all caching and compile API", "[nttp]") {
     SECTION("Direct find_all call") {
         auto results = find_all<"abc">("abc abc abc");
         int count = 0;
-        for (auto [matched, g0] : results) {
-            CHECK(matched);
+        for (auto [g0] : results) {
             CHECK(g0 == "abc");
             count++;
         }
@@ -25,8 +24,7 @@ TEST_CASE("NTTP find_all caching and compile API", "[nttp]") {
 
         REQUIRE(std::ranges::distance(results) == 2);
 
-        auto [m1, g1_0, g1_1] = *results.begin();
-        CHECK(m1);
+        auto [g1_0, g1_1] = *results.begin();
         CHECK(g1_0 == "hello");
         CHECK(g1_1 == "hello");
     }
@@ -35,8 +33,7 @@ TEST_CASE("NTTP find_all caching and compile API", "[nttp]") {
         auto re = "(\\d+)"_re;
         auto results = re.find_all("123 456");
         REQUIRE(std::ranges::distance(results) == 2);
-        auto [m, g0, g1] = *results.begin();
-        CHECK(m);
+        auto [g0, g1] = *results.begin();
         CHECK(g0 == "123");
         CHECK(g1 == "123");
     }

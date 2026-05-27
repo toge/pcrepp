@@ -39,18 +39,26 @@ TEST_CASE("NTTP find_all returns result vector", "[nttp_find]") {
   auto const all = pcrepp::find_all<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180");
   REQUIRE(std::ranges::distance(all) == 2);
 
+  // 構造化束縛を用いたループ（ユーザーの例）
+  int count = 0;
+  for (auto const& [whole, key, value] : all) {
+    if (count == 0) {
+      CHECK(whole == "age:30");
+      CHECK(key == "age");
+      CHECK(value == "30");
+    } else {
+      CHECK(whole == "height:180");
+      CHECK(key == "height");
+      CHECK(value == "180");
+    }
+    count++;
+  }
+  CHECK(count == 2);
+
   auto it = all.begin();
   auto const& r1 = *it;
-  CHECK(r1);
-  CHECK(r1.get<"key">() == "age");
-  CHECK(r1.get<"value">() == "30");
-
-  ++it;
-  auto const [m2, whole2, key2, value2] = *it;
-  CHECK(m2);
-  CHECK(whole2 == "height:180");
-  CHECK(key2 == "height");
-  CHECK(value2 == "180");
+  CHECK(std::get<1>(r1) == "age");
+  CHECK(std::get<2>(r1) == "30");
 }
 
 TEST_CASE("NTTP find throws on invalid pattern", "[nttp_find]") {
@@ -84,5 +92,17 @@ TEST_CASE("NTTP compile and _re literal", "[nttp_find]") {
     CHECK(m);
     CHECK(key == "age");
     CHECK(value == "30");
+  }
+
+  SECTION("_re literal") {
+    auto const all = pcrepp::find_all<R"re(<li class=\"item-card[\\s\\S]*?data-product-id=\"([0-9]+)\"[\\s\\S]*?data-product-price=\"([0-9]+)\"[\\s\\S]*?<div class=\"item-card__title\"><a[\\s\\S]*?href=\"(https://booth\\.pm/ja/items/[0-9]+)\">([\\s\\S]*?)</a>[\\s\\S]*?<div class=\"item-card__shop-name\">([\\s\\S]*?)</div>\000")re">("aaaa");
+    for (auto const& [w, g1, g2, g3, g4, g5] : all) {
+      CHECK(w.empty());
+      CHECK(g1.empty());
+      CHECK(g2.empty());
+      CHECK(g3.empty());
+      CHECK(g4.empty());
+      CHECK(g5.empty());
+    }
   }
 }
