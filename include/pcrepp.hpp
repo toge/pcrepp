@@ -582,11 +582,12 @@ struct iterator {
   context<UseJIT> const* ctx = nullptr;
   std::string_view target = {};
   size_t pos = 0uz;
+  unsigned int option = 0;
   bool is_end = true;
   match_result result;
 
   iterator() = default;
-  iterator(context<UseJIT> const* c, std::string_view t, size_t p, bool end);
+  iterator(context<UseJIT> const* c, std::string_view t, size_t p, unsigned int o, bool end);
 
   auto operator++() -> iterator&;
   auto operator++(int) -> iterator {
@@ -905,10 +906,11 @@ public:
    * @brief 全てのマッチ箇所をイテレートするためのrangeを返す
    *
    * @param target 検索対象の文字列
+   * @param option 検索オプション
    * @return match_range<UseJIT>
    */
-  auto find_all(std::string_view const target) const noexcept -> match_range<UseJIT> {
-    return {iterator<UseJIT>(this, target, 0uz, false), iterator<UseJIT>(this, target, 0uz, true)};
+  auto find_all(std::string_view const target, unsigned int const option = 0) const noexcept -> match_range<UseJIT> {
+    return {iterator<UseJIT>(this, target, 0uz, option, false), iterator<UseJIT>(this, target, 0uz, option, true)};
   }
 
   /**
@@ -1071,13 +1073,13 @@ auto find(std::string_view const target, size_t const start = 0uz, unsigned int 
  * @brief NTTP 版 find_all：正規表現をテンプレート引数で指定する全マッチ検索
  */
 template <fixed_string Pattern, bool UseJIT = true>
-auto find_all(std::string_view const target) {
+auto find_all(std::string_view const target, unsigned int const option = 0) {
   static auto const ctx_res = context<UseJIT>::create(Pattern.view());
   if (not ctx_res) {
     throw std::runtime_error{"NTTP find_all compile error: " + ctx_res.error()};
   }
   auto const& ctx = *ctx_res;
-  return ctx.find_all(target) | std::views::transform([](auto const& mr) {
+  return ctx.find_all(target, option) | std::views::transform([](auto const& mr) {
     return detail::match_result_to_tuple<nttp_group_count_v<Pattern>>(mr);
   });
 }
@@ -1102,8 +1104,8 @@ struct nttp_regex {
   /**
    * @brief 全てのマッチを検索
    */
-  auto find_all(std::string_view const target) const {
-    return pcrepp::find_all<Pattern, UseJIT>(target);
+  auto find_all(std::string_view const target, unsigned int const option = 0) const {
+    return pcrepp::find_all<Pattern, UseJIT>(target, option);
   }
 
   /**
@@ -1159,8 +1161,8 @@ auto find_frozen(std::string_view const target, size_t const start = 0uz, unsign
  * @brief frozenchars::FrozenString 版 find_all（明示API）
  */
 template <frozenchars::FrozenString Pattern, bool UseJIT = true>
-auto find_all_frozen(std::string_view const target) {
-  return find_all<to_fixed_string(Pattern), UseJIT>(target);
+auto find_all_frozen(std::string_view const target, unsigned int const option = 0) {
+  return find_all<to_fixed_string(Pattern), UseJIT>(target, option);
 }
 
 /**
@@ -1184,8 +1186,8 @@ auto find(std::string_view const target, size_t const start = 0uz, unsigned int 
  * @brief frozenchars::FrozenString 版 find_all（同名オーバーロード）
  */
 template <frozenchars::FrozenString Pattern, bool UseJIT = true>
-auto find_all(std::string_view const target) {
-  return find_all_frozen<Pattern, UseJIT>(target);
+auto find_all(std::string_view const target, unsigned int const option = 0) {
+  return find_all_frozen<Pattern, UseJIT>(target, option);
 }
 
 /**
@@ -1202,10 +1204,10 @@ template <bool UseJIT>
 inline match_result::match_result(context<UseJIT> const& ctx) : match_result(ctx.code) {}
 
 template <bool UseJIT>
-inline iterator<UseJIT>::iterator(context<UseJIT> const* c, std::string_view t, size_t p, bool end) : ctx(c), target(t), pos(p), is_end(end) {
+inline iterator<UseJIT>::iterator(context<UseJIT> const* c, std::string_view t, size_t p, unsigned int o, bool end) : ctx(c), target(t), pos(p), option(o), is_end(end) {
   if (!is_end && ctx) {
     result  = match_result(*ctx);
-    if (auto const rc = ctx->find(target, result, pos); not rc || *rc <= 0) {
+    if (auto const rc = ctx->find(target, result, pos, option); not rc || *rc <= 0) {
       is_end = true;
     }
   }
@@ -1221,7 +1223,7 @@ inline auto iterator<UseJIT>::operator++() -> iterator& {
       is_end = true;
       return *this;
     }
-    if (auto const rc = ctx->find(target, result, pos); not rc || *rc <= 0) {
+    if (auto const rc = ctx->find(target, result, pos, option); not rc || *rc <= 0) {
       is_end = true;
     }
   }

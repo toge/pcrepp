@@ -49,7 +49,7 @@ target_link_libraries(your_target PRIVATE pcrepp::pcrepp)
 - **`match(target, match_result, option)`**: 完全一致を判定します。
 - **`replace(target, replacement, option)`**: 文字列による全置換を行います。
 - **`replace(target, callback)`**: ラムダ式を用いた動的置換を行います。
-- **`find_all(target)`**: すべてのマッチを巡回するための Range を返します。
+- **`find_all(target, option)`**: すべてのマッチを巡回するための Range を返します。
 - **`split(target)`**: 正規表現を区切り文字として文字列を分割します。
 
 ### `pcrepp::find<"..."> / pcrepp::find_all<"...">` (NTTP API)
@@ -82,13 +82,13 @@ if (auto [matched, whole, key, value] = pcrepp::find<R"((\w+):(\d+))">("age:30")
 - **名前付き取得**: `result.get<"name">()`
 - **マッチしない場合**: `bool` は `false` で、それ以外は空の `std::string_view`
 - **エラー時**: `std::runtime_error` を送出
-
-#### `find_all<Pattern>(target)`
+#### `find_all<Pattern>(target, option = 0)`
 
 すべてのマッチを取得します。
 
 ```cpp
-auto all = pcrepp::find_all<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180");
+auto all = pcrepp::find_all<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180", 0);
+```
 for (auto const& result : all) {
   if (not result) continue;
   auto key = result.get<"key">();
