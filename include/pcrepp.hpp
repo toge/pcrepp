@@ -410,8 +410,7 @@ struct match_result {
   match_result(match_result const& other) {
     if (other.holder && other.holder->code) {
       holder = std::make_shared<data_holder>(other.holder->code);
-      auto const count = pcre2_get_ovector_count(other.holder->data);
-      std::memcpy(holder->ovector, other.holder->ovector, sizeof(size_t) * count * 2uz);
+      copy_ovector(holder->ovector, holder->data, other.holder->ovector, other.holder->data);
       holder->target = other.holder->target;
     }
   }
@@ -420,8 +419,7 @@ struct match_result {
     if (this != &other) {
       if (other.holder && other.holder->code) {
         holder = std::make_shared<data_holder>(other.holder->code);
-        auto const count = pcre2_get_ovector_count(other.holder->data);
-        std::memcpy(holder->ovector, other.holder->ovector, sizeof(size_t) * count * 2uz);
+        copy_ovector(holder->ovector, holder->data, other.holder->ovector, other.holder->data);
         holder->target = other.holder->target;
       } else {
         holder.reset();
@@ -498,11 +496,26 @@ struct match_result {
   auto end_pos()   const noexcept -> size_t { return holder ? holder->ovector[1] : 0uz; }
 
 private:
+  /**
+   * @brief ovector を宛先容量に収まる範囲でコピーする
+   */
+  static auto copy_ovector(size_t* dst_ovector, pcre2_match_data* dst_data, size_t const* src_ovector, pcre2_match_data* src_data) noexcept -> void {
+    if (not dst_ovector || not dst_data || not src_ovector || not src_data) {
+      return;
+    }
+    auto const dst_count  = static_cast<size_t>(pcre2_get_ovector_count(dst_data));
+    auto const src_count  = static_cast<size_t>(pcre2_get_ovector_count(src_data));
+    auto const pair_count = (dst_count < src_count) ? dst_count : src_count;
+    std::memcpy(dst_ovector, src_ovector, sizeof(size_t) * pair_count * 2uz);
+    for (auto const i : std::views::iota(pair_count * 2uz, dst_count * 2uz)) {
+      dst_ovector[i] = PCRE2_UNSET;
+    }
+  }
+
   match_result(pcre2_code const* code, pcre2_match_data* src_data, std::string_view target) {
     if (code && src_data) {
       holder = std::make_shared<data_holder>(code);
-      auto const count = pcre2_get_ovector_count(src_data);
-      std::memcpy(holder->ovector, pcre2_get_ovector_pointer(src_data), sizeof(size_t) * count * 2uz);
+      copy_ovector(holder->ovector, holder->data, pcre2_get_ovector_pointer(src_data), src_data);
       holder->target = target;
     }
   }

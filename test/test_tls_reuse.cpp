@@ -65,3 +65,34 @@ TEST_CASE("TLS reuse with different patterns", "[tls]") {
     CHECK(b == "y");
     CHECK(c == "z");
 }
+
+TEST_CASE("TLS reuse does not overflow when capture counts shrink", "[tls][stress]") {
+    using namespace pcrepp;
+
+    auto big_pattern = std::string{};
+    for (auto const _ : std::views::iota(0, 80)) {
+        std::ignore = _;
+        big_pattern += "(a)";
+    }
+    auto big_target = std::string(80, 'a');
+
+    auto const big_ctx_res = context<>::create(big_pattern);
+    REQUIRE(big_ctx_res);
+    auto const small_ctx_res = context<>::create(R"((\d+))");
+    REQUIRE(small_ctx_res);
+    auto const& big_ctx = *big_ctx_res;
+    auto const& small_ctx = *small_ctx_res;
+
+    for (auto const _ : std::views::iota(0, 5000)) {
+        std::ignore = _;
+        auto big_res = big_ctx.find(big_target, use_tls);
+        REQUIRE(big_res);
+        REQUIRE(*big_res);
+        CHECK((*big_res).get(1) == "a");
+
+        auto small_res = small_ctx.find("123", use_tls);
+        REQUIRE(small_res);
+        REQUIRE(*small_res);
+        CHECK((*small_res).get(1) == "123");
+    }
+}
