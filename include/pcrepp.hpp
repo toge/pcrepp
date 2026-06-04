@@ -187,40 +187,117 @@ constexpr auto is_named_capture_after_question(std::string_view const pattern, s
 /**
  * @brief 正規表現パターンのキャプチャグループ数を constexpr で計算
  *
- * 開き括弧を走査し、エスケープと文字クラスを考慮して、キャプチャグループ数を数えます。
- * 以下は加算されます：
+ * 開き括弧を走査し、エスケープ・文字クラス・各種拡張構文を考慮して、
+ * キャプチャグループ数を数えます。PCRE2 のセマンティクスに従い、
+ * branch reset `(?|...)` については「各分岐の最大値」を採用します。
+ *
+ * 加算されるもの：
  * - `(...)` : 通常のキャプチャグループ
  * - `(?<name>...)` / `(?'name'...)` / `(?P<name>...)` : 名前付きキャプチャ
  *
- * 以下は加算されません：
+ * 加算されないもの：
  * - `(?:...)` : 非キャプチャグループ
  * - `(?=...)` / `(?!...)` / `(?<=...)` / `(?<!...)` : lookaround
  * - `(?>...)` : atomic group
- * - `(?|...)` : branch reset group
  * - `(?#...)` : コメント
+ * - `(*VERB...)` (例: `(*MARK:foo)`, `(*FAIL)`, `(*ACCEPT)`, `(*F)`) : 制御動詞
+ * - `(?|...)` 自身は非キャプチャ (内部の最大分岐キャプチャ数が採用される)
+ * - `(?(cond)...)` / `(?R)` / `(?1)` 等の再帰・条件・部分式呼び出し
  * - エスケープされた括弧 `\(` / `\)`
- * - 文字クラス内の括弧 `[...]`
- *
- * @param pattern 正規表現パターン
- * @return キャプチャグループ数（ゼロ以上）
+ * - 文字クラス内 `[...]` の括弧
+ * - `\Q...\E` で囲われた範囲の括弧
  */
 constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> size_t {
-  auto capture_count = 0uz;
-  auto escaped = false;
-  auto in_class = false;
+  // (?|...) ブランチリセットの状態を保持するスタック要素。
+  // - current : 現在のブランチで蓄積中のキャプチャ数
+  // - max     : ブランチリセット内で観測された最大値
+  // - depth   : ブランチリセット内で開いている括弧の深さ
+  struct br_state { size_t current; size_t max; size_t depth; };
+
+  // ネスト用スタック (深さ 16 まで対応)
+  std::array<br_state, 16uz> br_stack{};
+  auto capture_count = 0uz;  // 最終的なキャプチャ数
+  auto br_depth    = 0uz;  // アクティブな (?|...) のネスト数 (0 = なし)
+  auto br_current  = 0uz;  // 現在のブランチで数えたキャプチャ数
+  auto br_max      = 0uz;  // 現在の (?|...) 内で最大だったブランチの値
+  auto br_parens   = 0uz;  // 現在の (?|...) 内で開いている `(` の深さ
+
+  auto in_class    = false;  // [...] 内
+  auto in_literal  = false;  // \Q...\E 内
+  auto in_comment  = false;  // (?#...) 内
+  auto in_verb     = false;  // (*VERB...) 内
+  auto escaped     = false;
   auto class_start = false;
+  auto comment_parens = 0uz;  // (?# 内 / (* 内の括弧の深さ
+  auto verb_parens    = 0uz;
+
+  auto const finalize_inner_branch_reset = [&]() -> size_t {
+    // 現在の (?|...) を閉じるときの共通処理。
+    // この (?|...) が生成するキャプチャ数 (= 各ブランチの最大値) を返す。
+    br_max = (br_current > br_max) ? br_current : br_max;
+    return br_max;
+  };
 
   for (auto i = 0uz; i < pattern.size(); ++i) {
     auto const ch = pattern[i];
-    if (in_class) {
+
+    // (?#comment) 内: 対応する ) で抜ける (内部の ( を入れ子カウント)
+    // comment_parens は (?# 内で開いている「内側」の ( の数 (外側 (?# の ( は含まない)
+    if (in_comment) {
+      if (escaped) { escaped = false; continue; }
+      if (ch == '\\') { escaped = true; continue; }
+      if (ch == '(') { ++comment_parens; continue; }
+      if (ch == ')') {
+        if (comment_parens == 0uz) {
+          // (?# の対応する )
+          in_comment = false;
+        } else {
+          --comment_parens;
+        }
+      }
+      continue;
+    }
+
+    // (*VERB) 内: 対応する ) で抜ける (内部の ( を入れ子カウント)
+    if (in_verb) {
+      if (escaped) { escaped = false; continue; }
+      if (ch == '\\') { escaped = true; continue; }
+      if (ch == '(') { ++verb_parens; continue; }
+      if (ch == ')') {
+        if (verb_parens == 0uz) {
+          in_verb = false;
+        } else {
+          --verb_parens;
+        }
+      }
+      continue;
+    }
+
+    // \Q...\E 内: すべてリテラル
+    if (in_literal) {
       if (escaped) {
         escaped = false;
-        class_start = false;
+        if (ch == 'E') {
+          in_literal = false;
+        }
         continue;
       }
+      if (ch == '\\') { escaped = true; continue; }
+      continue;  // ( ) | [ ] { } などはすべてリテラル
+    }
+
+    // [...] 内
+    if (in_class) {
+      if (escaped) { escaped = false; class_start = false; continue; }
       if (ch == '\\') {
-        escaped = true;
         class_start = false;
+        // クラス内でも \Q...\E は有効
+        if (i + 1uz < pattern.size() && pattern[i + 1uz] == 'Q') {
+          in_literal = true;
+          ++i;  // Q 自体をスキップ
+          continue;
+        }
+        escaped = true;
         continue;
       }
       if (ch == ']' && !class_start) {
@@ -229,8 +306,13 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
       class_start = false;
       continue;
     }
+
+    // 通常モード
     if (escaped) {
       escaped = false;
+      if (ch == 'Q') {
+        in_literal = true;
+      }
       continue;
     }
     if (ch == '\\') {
@@ -241,23 +323,130 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
       in_class = true;
       class_start = true;
       if (i + 1uz < pattern.size() && pattern[i + 1uz] == '^') {
-        class_start = false; // [^] も [^...] と同様に最初の ] をリテラルとして扱う必要があるため、次の文字で判定する
         ++i;
         class_start = true;
       }
       continue;
     }
+
+    if (ch == '|') {
+      if (br_depth > 0uz) {
+        br_max = (br_current > br_max) ? br_current : br_max;
+        br_current = 0uz;
+      }
+      continue;
+    }
+
+    if (ch == ')') {
+      if (br_depth > 0uz) {
+        if (br_parens > 0uz) {
+          --br_parens;  // 内側グループの閉じ
+        } else {
+          // (?|...) 自体の閉じ
+          auto const inner_caps = finalize_inner_branch_reset();
+          --br_depth;
+          if (br_depth == 0uz) {
+            // 最外の (?|) の閉じ: キャプチャ数を total に確定
+            capture_count += inner_caps;
+            br_current = 0uz;
+            br_max = 0uz;
+            br_parens = 0uz;
+          } else {
+            // ネストした内側の (?|...) の閉じ → 外側へ寄与
+            auto const outer = br_stack[br_depth - 1uz];
+            br_current = outer.current + inner_caps;
+            br_max = outer.max;
+            br_parens = outer.depth;
+          }
+        }
+      }
+      continue;
+    }
+
     if (ch != '(') {
       continue;
     }
-    if (i + 1uz >= pattern.size() || pattern[i + 1uz] != '?') {
-      ++capture_count;
+
+    // ch == '('
+
+    // (?#comment)
+    if (i + 2uz < pattern.size() && pattern[i + 1uz] == '?' && pattern[i + 2uz] == '#') {
+      in_comment = true;
+      comment_parens = 0uz;  // (?# 自体の ( は含めず、内部の入れ子のみカウント
+      i += 2uz;  // ?# をスキップ
       continue;
     }
-    if (is_named_capture_after_question(pattern, i)) {
+
+    // (*VERB)
+    if (i + 1uz < pattern.size() && pattern[i + 1uz] == '*') {
+      in_verb = true;
+      verb_parens = 0uz;
+      i += 1uz;  // * をスキップ
+      continue;
+    }
+
+    // (?|...) branch reset
+    if (i + 2uz < pattern.size() && pattern[i + 1uz] == '?' && pattern[i + 2uz] == '|') {
+      if (br_depth < br_stack.size()) {
+        br_stack[br_depth] = {br_current, br_max, br_parens};
+        ++br_depth;
+        br_current = 0uz;
+        br_max = 0uz;
+        br_parens = 0uz;
+      }
+      i += 2uz;  // ?| をスキップ
+      continue;
+    }
+
+    // キャプチャ判定
+    auto is_capture = false;
+    if (i + 1uz >= pattern.size() || pattern[i + 1uz] != '?') {
+      is_capture = true;
+    } else {
+      // (?...) 系: 名前付きキャプチャなら true
+      if (i + 2uz < pattern.size()) {
+        auto const marker = pattern[i + 2uz];
+        if (marker == '<') {
+          if (i + 3uz < pattern.size()) {
+            auto const next = pattern[i + 3uz];
+            if (next != '=' && next != '!') {
+              is_capture = true;  // (?<name>...)
+            }
+          }
+        } else if (marker == '\'') {
+          is_capture = true;  // (?'name'...)
+        } else if (marker == 'P') {
+          if (i + 3uz < pattern.size() && pattern[i + 3uz] == '<') {
+            is_capture = true;  // (?P<name>...)
+          }
+        }
+        // (?:) (?=) (?!...) (?>...) (?<=) (?<!) (?(... (?R) (?1) は非キャプチャ
+      }
+    }
+
+    // ブランチリセット内の場合: どのグループも (キャプチャ・非キャプチャ問わず)
+    // `(` の入れ子を追跡する必要がある。キャプチャならカウンタも増やす。
+    if (br_depth > 0uz) {
+      ++br_parens;
+      if (is_capture) {
+        ++br_current;
+      }
+    } else if (is_capture) {
       ++capture_count;
     }
   }
+
+  // 閉じられていない (?| がある場合 (フォールバック): 現在の最大値を total に加算
+  if (br_depth > 0uz) {
+    auto pending = finalize_inner_branch_reset();
+    // ネストした未閉じスタックをフラットに加算
+    for (auto d = br_depth; d > 0uz; --d) {
+      auto const outer = br_stack[d - 1uz];
+      pending += outer.current;
+    }
+    capture_count += pending;
+  }
+
   return capture_count;
 }
 
@@ -326,6 +515,16 @@ auto parse_integer(std::string_view const sv) noexcept -> T {
   return {};
 }
 
+template <supported_integer_get_type T>
+auto try_parse_integer(std::string_view const sv) noexcept -> std::optional<T> {
+  auto value = T{};
+  auto const [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), value);
+  if (ec == std::errc{} && ptr == sv.data() + sv.size()) {
+    return value;
+  }
+  return std::nullopt;
+}
+
 template <typename T>
   requires(std::same_as<T, float> || std::same_as<T, double>)
 auto parse_floating(std::string_view const sv) noexcept -> T {
@@ -335,6 +534,17 @@ auto parse_floating(std::string_view const sv) noexcept -> T {
     return value;
   }
   return {};
+}
+
+template <typename T>
+  requires(std::same_as<T, float> || std::same_as<T, double>)
+auto try_parse_floating(std::string_view const sv) noexcept -> std::optional<T> {
+  auto value = T{};
+  auto const result = fast_float::from_chars(sv.data(), sv.data() + sv.size(), value);
+  if (result.ec == std::errc{} && result.ptr == sv.data() + sv.size()) {
+    return value;
+  }
+  return std::nullopt;
 }
 
 struct tls_match_data_cache {
@@ -364,6 +574,29 @@ struct tls_match_data_cache {
 inline auto get_tls_match_data(pcre2_code const* code) -> pcre2_match_data* {
   static thread_local tls_match_data_cache cache;
   return cache.get(code);
+}
+
+/**
+ * @brief pcre2_substring_number_from_name は NUL 終端文字列を要求するため、
+ *        std::string_view を内部バッファにコピーして NUL 終端したうえで呼び出す。
+ *
+ * 短い名前は SBO 風の固定バッファで賄い、長さは動的に確保する。
+ * 名前が空の場合は PCRE2_ERROR_NOSUBSTRING (-56) を直接返す。
+ */
+inline auto lookup_named_capture(pcre2_code const* code, std::string_view const name) -> int {
+  if (name.empty()) {
+    return PCRE2_ERROR_NOSUBSTRING;
+  }
+  if (name.size() <= 255uz) {
+    // 短ければスタックバッファにコピー (最大 255 バイト + NUL)
+    auto buf = std::array<char, 256uz>{};
+    std::ranges::copy(name, buf.begin());
+    buf[name.size()] = '\0';
+    return pcre2_substring_number_from_name(code, reinterpret_cast<PCRE2_SPTR8>(buf.data()));
+  }
+  // 長い名前はヒープで
+  auto owned = std::string{name};
+  return pcre2_substring_number_from_name(code, reinterpret_cast<PCRE2_SPTR8>(owned.c_str()));
 }
 }  // namespace detail
 
@@ -450,17 +683,71 @@ struct match_result {
 
   /**
    * @brief 名前付きキャプチャグループを取得する
+   *
+   * name は NUL 終端されていなくても安全 (内部で NUL 終端バッファにコピーする)
    */
   template <supported_match_result_get_type T = std::string_view>
   auto get(std::string_view const name) const noexcept(supported_match_result_get_is_nothrow<T>) -> T {
     if (not holder || not holder->code || not holder->data) {
       return T{};
     }
-    auto const index = pcre2_substring_number_from_name(holder->code, reinterpret_cast<PCRE2_SPTR8>(name.data()));
+    auto const index = detail::lookup_named_capture(holder->code, name);
     if (index < 0) {
       return T{};
     }
     return get<T>(static_cast<size_t>(index));
+  }
+
+  /**
+   * @brief 数値型を std::optional として取得する (変換失敗を std::nullopt で判別可能)
+   *
+   * 文字列・浮動小数点型は `T` ではなく `std::optional<T>` を返す。
+   * 対応しない型を指定するとコンパイルエラー。
+   */
+  template <supported_integer_get_type T>
+  auto try_get(size_t const index) const noexcept -> std::optional<T> {
+    auto const sv = get_view(index);
+    if (sv.empty()) {
+      // マッチ範囲外 / 未マッチ / 値なし
+      return std::nullopt;
+    }
+    return detail::try_parse_integer<T>(sv);
+  }
+  template <typename T>
+    requires(std::same_as<T, float> || std::same_as<T, double>)
+  auto try_get(size_t const index) const noexcept -> std::optional<T> {
+    auto const sv = get_view(index);
+    if (sv.empty()) {
+      return std::nullopt;
+    }
+    return detail::try_parse_floating<T>(sv);
+  }
+
+  /**
+   * @brief 名前付きグループの数値型を std::optional として取得
+   */
+  template <supported_integer_get_type T>
+  auto try_get(std::string_view const name) const noexcept -> std::optional<T> {
+    if (not holder || not holder->code || not holder->data) {
+      return std::nullopt;
+    }
+    auto const index = detail::lookup_named_capture(holder->code, name);
+    if (index < 0) {
+      return std::nullopt;
+    }
+    return try_get<T>(static_cast<size_t>(index));
+  }
+  template <typename T>
+    requires(std::same_as<T, float> || std::same_as<T, double>)
+  auto try_get(std::string_view const name) const noexcept -> std::optional<T> {
+    if (not holder || not holder->code || not holder->data) {
+      return std::nullopt;
+    }
+    auto const index = detail::lookup_named_capture(holder->code, name);
+    if (index < 0) {
+      return std::nullopt;
+    }
+    return try_get<T>(static_cast<size_t>(index));
   }
 
   auto     operator[](size_t const index) const noexcept -> std::string_view { return get(index); }
@@ -701,7 +988,7 @@ public:
    * @param option コンパイルオプション (PCRE2_UTF, PCRE2_CASELESSなど)
    * @return std::expected<void, std::string> 失敗ならエラーメッセージを返す
    */
-  auto compile(std::string_view const src, unsigned int option = 0) noexcept -> std::expected<void, std::string> {
+  auto compile(std::string_view const src, unsigned int option = 0) -> std::expected<void, std::string> {
     release();
 
     auto ec = 0;
@@ -722,6 +1009,8 @@ public:
   /**
    * @brief 名前付きキャプチャグループのインデックスを取得する
    *
+   * name は NUL 終端されていなくても安全 (内部で NUL 終端バッファにコピーする)
+   *
    * @param name キャプチャグループ名
    * @return 見つかった場合はインデックス、見つからない場合は負値
    */
@@ -729,7 +1018,7 @@ public:
     if (not code) {
       return -1;
     }
-    return pcre2_substring_number_from_name(code, reinterpret_cast<PCRE2_SPTR8>(name.data()));
+    return detail::lookup_named_capture(code, name);
   }
 
   /**
@@ -827,7 +1116,7 @@ public:
    * @param option マッチオプション
    * @return std::expected<bool, std::string> 完全一致する場合はtrue、それ以外はfalse
    */
-  auto match(std::string_view const target, match_result& mr, unsigned int const option = 0) const noexcept -> std::expected<bool, std::string> {
+  auto match(std::string_view const target, match_result& mr, unsigned int const option = 0) const -> std::expected<bool, std::string> {
     auto const rc = find(target, mr, 0uz, option | PCRE2_ANCHORED | PCRE2_ENDANCHORED);
     if (not rc) {
       return std::unexpected{rc.error()};
@@ -843,7 +1132,7 @@ public:
    * @param option 置換オプション
    * @return std::expected<std::string, std::string> 置換後の文字列
    */
-  auto replace(std::string_view const target, std::string_view const replacement, unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL) const noexcept -> std::expected<std::string, std::string> {
+  auto replace(std::string_view const target, std::string_view const replacement, unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL) const -> std::expected<std::string, std::string> {
     if (not code) {
       return std::unexpected{"Not compiled."};
     }
@@ -922,7 +1211,7 @@ public:
    * @param option 検索オプション
    * @return match_range<UseJIT>
    */
-  auto find_all(std::string_view const target, unsigned int const option = 0) const noexcept -> match_range<UseJIT> {
+  auto find_all(std::string_view const target, unsigned int const option = 0) const -> match_range<UseJIT> {
     return {iterator<UseJIT>(this, target, 0uz, option, false), iterator<UseJIT>(this, target, 0uz, option, true)};
   }
 
@@ -932,7 +1221,7 @@ public:
    * @param target 分割対象の文字列
    * @return std::vector<std::string_view> 分割された文字列 区切り文字列がなければtarget全体が1要素のベクター
    */
-  auto split(std::string_view const target) const noexcept -> std::vector<std::string_view> {
+  auto split(std::string_view const target) const -> std::vector<std::string_view> {
     auto res  = std::vector<std::string_view>{};
 
     auto last = 0uz;
@@ -985,24 +1274,7 @@ struct nttp_match_result {
   }
 
   template <fixed_string Name>
-  auto get() const -> std::string_view {
-    if (not matched) {
-      return {};
-    }
-    static auto const ctx_res = context<UseJIT>::create(Pattern.view());
-    if (not ctx_res) {
-      return {};
-    }
-    auto const index = ctx_res->capture_index(Name.view());
-    if (index < 0) {
-      return {};
-    }
-    auto const uindex = static_cast<size_t>(index);
-    if (uindex >= groups.size()) {
-      return {};
-    }
-    return groups[uindex];
-  }
+  auto get() const -> std::string_view;
 };
 
 /**
@@ -1047,7 +1319,45 @@ template <fixed_string Pattern, bool UseJIT>
 auto make_nttp_result_raw(pcre2_match_data* md, std::string_view target) -> nttp_find_result_t<Pattern, UseJIT> {
   return make_nttp_result_raw_impl<Pattern, UseJIT>(md, target, std::make_index_sequence<nttp_group_count_v<Pattern>>{});
 }
+
+/**
+ * @brief NTTP パターンに対応するコンパイル済み context への参照を返す
+ *
+ * パターンをキーにプロセス内で 1 度だけコンパイルし、その後は同じ static
+ * インスタンスを共有する。コンパイル失敗時は std::runtime_error を送出する。
+ * `find<Pattern>` / `find_all<Pattern>` / `nttp_match_result::get<Name>` /
+ * `nttp_regex<Pattern>::match` から共通利用される。
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+inline auto get_nttp_context() -> context<UseJIT> const& {
+  static auto const ctx_res = context<UseJIT>::create(Pattern.view());
+  if (not ctx_res) {
+    throw std::runtime_error{"NTTP context compile error: " + ctx_res.error()};
+  }
+  return *ctx_res;
+}
 }  // namespace detail
+
+/**
+ * @brief nttp_match_result::get<Name>() の実装 (get_nttp_context 利用)
+ */
+template <fixed_string Pattern, bool UseJIT>
+template <fixed_string Name>
+auto nttp_match_result<Pattern, UseJIT>::get() const -> std::string_view {
+  if (not matched) {
+    return {};
+  }
+  auto const& ctx = detail::get_nttp_context<Pattern, UseJIT>();
+  auto const  index = ctx.capture_index(Name.view());
+  if (index < 0) {
+    return {};
+  }
+  auto const uindex = static_cast<size_t>(index);
+  if (uindex >= groups.size()) {
+    return {};
+  }
+  return groups[uindex];
+}
 
 /**
  * @brief nttp_match_result を構造化束縛可能にする get（tuple-like プロトコル）
@@ -1066,11 +1376,7 @@ auto get(nttp_match_result<Pattern, UseJIT> const& result) noexcept {
  */
 template <fixed_string Pattern, bool UseJIT = true>
 auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) -> nttp_find_result_t<Pattern, UseJIT> {
-  static auto const ctx_res = context<UseJIT>::create(Pattern.view());
-  if (not ctx_res) {
-    throw std::runtime_error{"NTTP find compile error: " + ctx_res.error()};
-  }
-  auto const& ctx = *ctx_res;
+  auto const& ctx = detail::get_nttp_context<Pattern, UseJIT>();
   auto*       md  = detail::get_tls_match_data(ctx.get_code());
   auto const  res = ctx.find(target, md, start, option);
   if (not res) {
@@ -1087,11 +1393,7 @@ auto find(std::string_view const target, size_t const start = 0uz, unsigned int 
  */
 template <fixed_string Pattern, bool UseJIT = true>
 auto find_all(std::string_view const target, unsigned int const option = 0) {
-  static auto const ctx_res = context<UseJIT>::create(Pattern.view());
-  if (not ctx_res) {
-    throw std::runtime_error{"NTTP find_all compile error: " + ctx_res.error()};
-  }
-  auto const& ctx = *ctx_res;
+  auto const& ctx = detail::get_nttp_context<Pattern, UseJIT>();
   return ctx.find_all(target, option) | std::views::transform([](auto const& mr) {
     return detail::match_result_to_tuple<nttp_group_count_v<Pattern>>(mr);
   });
@@ -1125,12 +1427,9 @@ struct nttp_regex {
    * @brief 完全一致を確認
    */
   auto match(std::string_view const target, unsigned int const option = 0) const {
-    static auto const ctx_res = context<UseJIT>::create(Pattern.view());
-    if (not ctx_res) {
-      throw std::runtime_error{"NTTP match compile error: " + ctx_res.error()};
-    }
+    auto const& ctx = detail::get_nttp_context<Pattern, UseJIT>();
     match_result mr;
-    auto const res = ctx_res->match(target, mr, option);
+    auto const res = ctx.match(target, mr, option);
     if (not res) {
       throw std::runtime_error{"NTTP match error: " + res.error()};
     }
@@ -1229,8 +1528,12 @@ inline iterator<UseJIT>::iterator(context<UseJIT> const* c, std::string_view t, 
 template <bool UseJIT>
 inline auto iterator<UseJIT>::operator++() -> iterator& {
   if (ctx && not is_end) {
-    auto const prev_end = result.end_pos();
-    auto const next_pos = (prev_end == pos) ? pos + 1uz : prev_end;  // ゼロ長マッチ対策
+    // ゼロ長マッチ対策: マッチが start == end のとき、次回は同じ位置を再マッチ
+    // しないように必ず 1 文字進める (検索開始位置より後ろでマッチした場合も
+    // 含めて、確実に重複を避ける)。
+    auto const prev_start = result.start_pos();
+    auto const prev_end   = result.end_pos();
+    auto const next_pos   = (prev_start == prev_end) ? prev_end + 1uz : prev_end;
     pos = next_pos;
     if (pos > target.size()) {
       is_end = true;

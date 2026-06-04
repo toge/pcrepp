@@ -88,7 +88,6 @@ if (auto [matched, whole, key, value] = pcrepp::find<R"((\w+):(\d+))">("age:30")
 
 ```cpp
 auto all = pcrepp::find_all<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180", 0);
-```
 for (auto const& result : all) {
   if (not result) continue;
   auto key = result.get<"key">();
@@ -107,7 +106,8 @@ for (auto const& result : all) {
 ### `pcrepp::match_result`
 個別のマッチング結果を保持するクラスです。
 
-- **`get<T = std::string_view>(index / name)`**: 指定したインデックスまたは名前のグループを取得します。`T` には `std::string_view`、`std::string`、`float`、`double`、各種整数型を指定でき、未対応型はコンパイルエラーになります。数値変換に失敗した場合はその型のデフォルト値を返します。
+- **`get<T = std::string_view>(index / name)`**: 指定したインデックスまたは名前のグループを取得します。`T` には `std::string_view`、`std::string`、`float`、`double`、各種整数型を指定でき、未対応型はコンパイルエラーになります。数値変換に失敗した場合はその型のデフォルト値を返します。`name` は NUL 終端されている必要はなく、内部で NUL 終端バッファにコピーされます。
+- **`try_get<T>(index / name)`**: 数値型のみ。変換に成功した場合は `std::optional<T>` が値を持ち、失敗・範囲外・名前未マッチは `std::nullopt` を返します。`get<T>()` と異なり、`0` (デフォルト値) と失敗を区別できます。
 - **`operator[]`**: `get` のエイリアス。
 - **`size()`**: キャプチャグループの数を返します。
 - **`start_pos() / end_pos()`**: マッチした箇所の開始/終了位置を返します。

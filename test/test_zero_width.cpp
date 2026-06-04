@@ -128,4 +128,60 @@ TEST_CASE("Zero-width matches", "[zero_width]") {
         CHECK(parts[0] == "a");
         CHECK(parts[1] == "b");
     }
+
+    SECTION("lookahead finds no duplicate zero-width matches at non-start positions") {
+        auto ctx_res = pcrepp::context<>::create(R"((?=a))");
+        REQUIRE(ctx_res.has_value());
+        auto const& ctx = *ctx_res;
+
+        // Target has 'a' at pos 1. (?=a) matches zero-width at pos 1 only.
+        // Should NOT emit duplicate at pos 1, and should not match at pos 0 or 2.
+        auto const target = "xab"sv;
+        auto results = ctx.find_all(target);
+        std::vector<std::pair<size_t, size_t>> positions;
+        for (auto const& mr : results) {
+            positions.emplace_back(mr.start_pos(), mr.end_pos());
+        }
+
+        REQUIRE(positions.size() == 1);
+        CHECK(positions[0] == std::pair{1uz, 1uz});
+    }
+
+    SECTION("lookbehind finds no duplicate zero-width matches at non-start positions") {
+        auto ctx_res = pcrepp::context<>::create(R"((?<=a))");
+        REQUIRE(ctx_res.has_value());
+        auto const& ctx = *ctx_res;
+
+        // 'a' at pos 1. (?<=a) matches zero-width at pos 2 only.
+        auto const target = "xab"sv;
+        auto results = ctx.find_all(target);
+        std::vector<std::pair<size_t, size_t>> positions;
+        for (auto const& mr : results) {
+            positions.emplace_back(mr.start_pos(), mr.end_pos());
+        }
+
+        REQUIRE(positions.size() == 1);
+        CHECK(positions[0] == std::pair{2uz, 2uz});
+    }
+
+    SECTION("zero-width match at start position does not duplicate") {
+        // a* on target where 'a' does not start: zero-width at pos 0 only.
+        auto ctx_res = pcrepp::context<>::create(R"(a*)");
+        REQUIRE(ctx_res.has_value());
+        auto const& ctx = *ctx_res;
+
+        auto const target = "baac"sv;
+        auto results = ctx.find_all(target);
+        std::vector<std::pair<size_t, size_t>> positions;
+        for (auto const& mr : results) {
+            positions.emplace_back(mr.start_pos(), mr.end_pos());
+        }
+
+        // Expected: "" at 0, "aa" at 1-3, "" at 3, "" at 4
+        REQUIRE(positions.size() == 4);
+        CHECK(positions[0] == std::pair{0uz, 0uz});
+        CHECK(positions[1] == std::pair{1uz, 3uz});
+        CHECK(positions[2] == std::pair{3uz, 3uz});
+        CHECK(positions[3] == std::pair{4uz, 4uz});
+    }
 }
