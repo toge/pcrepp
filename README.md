@@ -201,6 +201,10 @@ auto main() -> int {
 }
 ```
 
+## ベンチマーク
+
+pcrepp と raw PCRE2 のパフォーマンス比較は [benchmark.md](benchmark.md) を参照してください。
+
 ## ライセンス
 
 このプロジェクトは [MIT ライセンス](LICENSE) の下で公開されています。

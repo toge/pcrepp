@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 project(pcrepp LANGUAGES CXX)
 
 option(ENABLE_TESTS "Enable tests" ON)
+option(BUILD_BENCH "Build benchmarks" OFF)
 
 ## add stdc++ compiler flag
 include(CheckCXXCompilerFlag)
@@ -91,4 +92,8 @@ install(EXPORT pcreppTargets
 if(ENABLE_TESTS)
     enable_testing()
     add_subdirectory(test)
+endif()
+
+if(BUILD_BENCH)
+    add_subdirectory(bench)
 endif()
