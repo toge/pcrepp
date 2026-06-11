@@ -1330,7 +1330,12 @@ auto make_nttp_result_raw(pcre2_match_data* md, std::string_view target) -> nttp
  */
 template <fixed_string Pattern, bool UseJIT = true>
 inline auto get_nttp_context() -> context<UseJIT> const& {
-  static auto const ctx_res = context<UseJIT>::create(Pattern.view());
+  constexpr auto compile_opt = []() -> unsigned int {
+    for (auto const c : Pattern.view())
+      if (static_cast<unsigned char>(c) > 0x7F) return PCRE2_UTF;
+    return 0;
+  }();
+  static auto const ctx_res = context<UseJIT>::create(Pattern.view(), compile_opt);
   if (not ctx_res) {
     throw std::runtime_error{"NTTP context compile error: " + ctx_res.error()};
   }
