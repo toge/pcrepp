@@ -214,8 +214,8 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
   // - depth   : ブランチリセット内で開いている括弧の深さ
   struct br_state { size_t current; size_t max; size_t depth; };
 
-  // ネスト用スタック (深さ 16 まで対応)
-  std::array<br_state, 16uz> br_stack{};
+  // ネスト用スタック (深さ 64 まで対応。制限を超えると誤ったカウントになる)
+  std::array<br_state, 64uz> br_stack{};
   auto capture_count = 0uz;  // 最終的なキャプチャ数
   auto br_depth    = 0uz;  // アクティブな (?|...) のネスト数 (0 = なし)
   auto br_current  = 0uz;  // 現在のブランチで数えたキャプチャ数
@@ -273,17 +273,13 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
       continue;
     }
 
-    // \Q...\E 内: すべてリテラル
+    // \Q...\E 内: すべてリテラル (エスケープシーケンスは存在せず、\E のみが終端)
     if (in_literal) {
-      if (escaped) {
-        escaped = false;
-        if (ch == 'E') {
-          in_literal = false;
-        }
-        continue;
+      if (ch == '\\' && i + 1uz < pattern.size() && pattern[i + 1uz] == 'E') {
+        ++i;  // 'E' をスキップ
+        in_literal = false;
       }
-      if (ch == '\\') { escaped = true; continue; }
-      continue;  // ( ) | [ ] { } などはすべてリテラル
+      continue;
     }
 
     // [...] 内
@@ -563,6 +559,7 @@ struct tls_match_data_cache {
     if (not data || cc > capture_count) {
       if (data) {
         pcre2_match_data_free(data);
+        data = nullptr;
       }
       data          = pcre2_match_data_create_from_pattern(code, nullptr);
       capture_count = cc;
@@ -624,7 +621,7 @@ struct match_result {
     data_holder(pcre2_code const* c) : code(c) {
       if (code) {
         data    = pcre2_match_data_create_from_pattern(code, nullptr);
-        ovector = pcre2_get_ovector_pointer(data);
+        ovector = data ? pcre2_get_ovector_pointer(data) : nullptr;
       }
     }
 
@@ -899,7 +896,7 @@ struct iterator {
   auto operator->() const -> match_result const* { return &result; }
   auto operator==(iterator const& other) const -> bool {
     if (is_end && other.is_end) {
-      return true;
+      return ctx == other.ctx;
     }
     return is_end == other.is_end && ctx == other.ctx && pos == other.pos;
   }
@@ -1197,10 +1194,12 @@ public:
       last_pos = end;
       // 0長マッチ対策: 同じ位置でマッチし続けるのを防ぐ
       if (start == end) {
-        ++last_pos;
+        last_pos = (last_pos < target.size()) ? last_pos + 1uz : last_pos;
       }
     }
-    result.append(target.substr(last_pos));
+    if (last_pos < target.size()) {
+      result.append(target.substr(last_pos));
+    }
     return result;
   }
 
@@ -1523,7 +1522,7 @@ inline match_result::match_result(context<UseJIT> const& ctx) : match_result(ctx
 template <bool UseJIT>
 inline iterator<UseJIT>::iterator(context<UseJIT> const* c, std::string_view t, size_t p, unsigned int o, bool end) : ctx(c), target(t), pos(p), option(o), is_end(end) {
   if (!is_end && ctx) {
-    result  = match_result(*ctx);
+    result = match_result(*ctx);
     if (auto const rc = ctx->find(target, result, pos, option); not rc || *rc <= 0) {
       is_end = true;
     }
@@ -1533,9 +1532,6 @@ inline iterator<UseJIT>::iterator(context<UseJIT> const* c, std::string_view t, 
 template <bool UseJIT>
 inline auto iterator<UseJIT>::operator++() -> iterator& {
   if (ctx && not is_end) {
-    // ゼロ長マッチ対策: マッチが start == end のとき、次回は同じ位置を再マッチ
-    // しないように必ず 1 文字進める (検索開始位置より後ろでマッチした場合も
-    // 含めて、確実に重複を避ける)。
     auto const prev_start = result.start_pos();
     auto const prev_end   = result.end_pos();
     auto const next_pos   = (prev_start == prev_end) ? prev_end + 1uz : prev_end;
@@ -1544,6 +1540,8 @@ inline auto iterator<UseJIT>::operator++() -> iterator& {
       is_end = true;
       return *this;
     }
+    // match_result を再利用: find() が既存の data_holder の ovector を上書きするため、
+    // 新規ヒープ確保なしで次のマッチ結果を受け取れる。
     if (auto const rc = ctx->find(target, result, pos, option); not rc || *rc <= 0) {
       is_end = true;
     }
