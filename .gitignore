@@ -56,3 +56,5 @@ test.sh
 
 images*
 vcpkg_installed
+docs/plans
+docs/superpowers
