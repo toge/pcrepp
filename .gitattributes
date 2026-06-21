@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.cmake text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+build_*/ export-ignore
+build/ export-ignore
+.gitignore export-ignore

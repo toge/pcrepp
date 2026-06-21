@@ -132,14 +132,18 @@ TEST_CASE("Runtime context with PCRE2_UTF handles find_all across newlines", "[j
 // ============================================================
 
 TEST_CASE("NTTP find extracts ASCII digits from Japanese text", "[japanese][nttp_find]") {
-  auto [matched, whole, price] = pcrepp::find<R"((\d+)円)">("価格: 500円");
+  auto res = pcrepp::find<R"((\d+)円)">("価格: 500円");
+  REQUIRE(res);
+  auto [matched, whole, price] = *res;
   CHECK(matched);
   CHECK(whole == "500円");
   CHECK(price == "500");
 }
 
 TEST_CASE("NTTP find matches literal Japanese substring", "[japanese][nttp_find]") {
-  auto [matched, whole] = pcrepp::find<R"re(日本)re">("日本語");
+  auto res = pcrepp::find<R"re(日本)re">("日本語");
+  REQUIRE(res);
+  auto [matched, whole] = *res;
   CHECK(matched);
   CHECK(whole == "日本");
 }
@@ -165,7 +169,9 @@ TEST_CASE("NTTP find_all extracts ASCII digits from Japanese text", "[japanese][
 TEST_CASE("NTTP compile API matches Japanese text", "[japanese][nttp_find]") {
   static constexpr auto re = pcrepp::compile<R"re(([\w\W]+)の([\w\W]+))re">();
 
-  auto [matched, whole, item, desc] = re.find("京都の紅葉");
+  auto res = re.find("京都の紅葉");
+  REQUIRE(res);
+  auto [matched, whole, item, desc] = *res;
   CHECK(matched);
   CHECK(item == "京都");
   CHECK(desc == "紅葉");
@@ -173,9 +179,10 @@ TEST_CASE("NTTP compile API matches Japanese text", "[japanese][nttp_find]") {
 
 TEST_CASE("NTTP named capture with Japanese text", "[japanese][nttp_find]") {
   auto const res = pcrepp::find<R"re((?<pref>[\w\W]+)県(?<city>[\w\W]+))re">("京都県京都");
-  CHECK(static_cast<bool>(res));
-  CHECK(res.get<"pref">() == "京都");
-  CHECK(res.get<"city">() == "京都");
+  REQUIRE(res);
+  CHECK(static_cast<bool>(*res));
+  CHECK(res->get<"pref">() == "京都");
+  CHECK(res->get<"city">() == "京都");
 }
 
 // ============================================================
@@ -200,12 +207,15 @@ TEST_CASE("Dynamic replace callback with Japanese text", "[japanese]") {
     auto const price = m.template get<int>(1);
     return std::to_string(price * 110 / 100) + "円(税込)";
   });
-  CHECK(result == "価格は550円(税込)です");
+  REQUIRE(result.has_value());
+  CHECK(*result == "価格は550円(税込)です");
 }
 
 TEST_CASE("NTTP compile API with ASCII pattern on Japanese text", "[japanese][nttp_find]") {
   static constexpr auto re = pcrepp::compile<R"((\d+)円)">();
-  auto [matched, whole, price] = re.find("価格: 300円");
+  auto res = re.find("価格: 300円");
+  REQUIRE(res);
+  auto [matched, whole, price] = *res;
   CHECK(matched);
   CHECK(whole == "300円");
   CHECK(price == "300");

@@ -18,7 +18,11 @@ Checks: >
   modernize-*,
   -modernize-use-trailing-return-type,
   performance-*,
-  portabilty-*,
+  portability-*,
+  readability-*,
+  -readability-magic-numbers,
+  -readability-named-parameter,
+  -readability-avoid-const-params-in-decls,
 
 CheckOptions:
   - key:             readability-identifier-naming.ClassCase

@@ -143,48 +143,6 @@ struct match_result;
 
 namespace detail {
 /**
- * @brief `(?` の直後が名前付きキャプチャグループかを判定
- *
- * PCRE2 の以下の構文を識別します：
- * - `(?<name>...)` / `(?'name'...)` : 名前付きキャプチャ
- * - `(?P<name>...)` : Python形式の名前付きキャプチャ
- *
- * 次の非キャプチャ構文は false を返します：
- * - `(?:...)` : 非キャプチャグループ
- * - `(?=...)` / `(?!...)` : lookahead
- * - `(?<=...)` / `(?<!...)` : lookbehind
- * - `(?>...)` : atomic group
- *
- * @param pattern 正規表現パターン
- * @param open_paren_pos 開き括弧 '(' の位置
- * @return 名前付きキャプチャグループなら true、それ以外は false
- */
-constexpr auto is_named_capture_after_question(std::string_view const pattern, size_t const open_paren_pos) noexcept -> bool {
-  auto const q_pos = open_paren_pos + 1uz;
-  if (q_pos >= pattern.size() || pattern[q_pos] != '?') {
-    return false;
-  }
-  auto const marker_pos = q_pos + 1uz;
-  if (marker_pos >= pattern.size()) {
-    return false;
-  }
-  if (pattern[marker_pos] == '\'') {
-    return true;
-  }
-  if (pattern[marker_pos] == 'P') {
-    return marker_pos + 1uz < pattern.size() && pattern[marker_pos + 1uz] == '<';
-  }
-  if (pattern[marker_pos] == '<') {
-    if (marker_pos + 1uz >= pattern.size()) {
-      return false;
-    }
-    auto const next = pattern[marker_pos + 1uz];
-    return next != '=' && next != '!';
-  }
-  return false;
-}
-
-/**
  * @brief 正規表現パターンのキャプチャグループ数を constexpr で計算
  *
  * 開き括弧を走査し、エスケープ・文字クラス・各種拡張構文を考慮して、
@@ -479,68 +437,56 @@ template <size_t N>
 using nttp_match_tuple_t = string_view_tuple_t<N>;
 
 /**
- * @brief マッチなしを表す空のタプルを生成（内部実装用）
- * @tparam N タプルの要素数
- * @tparam Is インデックスシーケンス
+ * @brief 整数型パースのコア実装
+ * @tparam T パース対象の整数型
+ * @param sv パース対象の文字列
+ * @return パース結果とエラーコード
  */
-template <size_t N, size_t... Is>
-constexpr auto make_empty_match_tuple_impl(std::index_sequence<Is...>) noexcept -> nttp_match_tuple_t<N> {
-  return std::make_tuple((static_cast<void>(Is), std::string_view{})...);
-}
-
-/**
- * @brief マッチなしを表す空のタプルを生成
- *
- * マッチが失敗した場合に空の全要素を返します。
- *
- * @tparam N タプルの要素数（全体マッチ + キャプチャ数）
- * @return N個の空の std::string_view を含むタプル
- */
-template <size_t N>
-constexpr auto make_empty_match_tuple() noexcept -> nttp_match_tuple_t<N> {
-  return make_empty_match_tuple_impl<N>(std::make_index_sequence<N>{});
+template <supported_integer_get_type T>
+auto parse_integer_core(std::string_view const sv) noexcept -> std::pair<T, bool> {
+  auto value = T{};
+  auto const [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), value);
+  return {value, ec == std::errc{} && ptr == sv.data() + sv.size()};
 }
 
 template <supported_integer_get_type T>
 auto parse_integer(std::string_view const sv) noexcept -> T {
-  auto value = T{};
-  auto const [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), value);
-  if (ec == std::errc{} && ptr == sv.data() + sv.size()) {
-    return value;
-  }
-  return {};
+  auto const [value, ok] = parse_integer_core<T>(sv);
+  return ok ? value : T{};
 }
 
 template <supported_integer_get_type T>
 auto try_parse_integer(std::string_view const sv) noexcept -> std::optional<T> {
+  auto const [value, ok] = parse_integer_core<T>(sv);
+  return ok ? std::optional<T>{value} : std::nullopt;
+}
+
+/**
+ * @brief 浮動小数点型パースのコア実装
+ * @tparam T パース対象の浮動小数点型
+ * @param sv パース対象の文字列
+ * @return パース結果とエラーコード
+ */
+template <typename T>
+  requires(std::same_as<T, float> || std::same_as<T, double>)
+auto parse_floating_core(std::string_view const sv) noexcept -> std::pair<T, bool> {
   auto value = T{};
-  auto const [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), value);
-  if (ec == std::errc{} && ptr == sv.data() + sv.size()) {
-    return value;
-  }
-  return std::nullopt;
+  auto const result = fast_float::from_chars(sv.data(), sv.data() + sv.size(), value);
+  return {value, result.ec == std::errc{} && result.ptr == sv.data() + sv.size()};
 }
 
 template <typename T>
   requires(std::same_as<T, float> || std::same_as<T, double>)
 auto parse_floating(std::string_view const sv) noexcept -> T {
-  auto value = T{};
-  auto const result = fast_float::from_chars(sv.data(), sv.data() + sv.size(), value);
-  if (result.ec == std::errc{} && result.ptr == sv.data() + sv.size()) {
-    return value;
-  }
-  return {};
+  auto const [value, ok] = parse_floating_core<T>(sv);
+  return ok ? value : T{};
 }
 
 template <typename T>
   requires(std::same_as<T, float> || std::same_as<T, double>)
 auto try_parse_floating(std::string_view const sv) noexcept -> std::optional<T> {
-  auto value = T{};
-  auto const result = fast_float::from_chars(sv.data(), sv.data() + sv.size(), value);
-  if (result.ec == std::errc{} && result.ptr == sv.data() + sv.size()) {
-    return value;
-  }
-  return std::nullopt;
+  auto const [value, ok] = parse_floating_core<T>(sv);
+  return ok ? std::optional<T>{value} : std::nullopt;
 }
 
 struct tls_match_data_cache {
@@ -637,23 +583,25 @@ struct match_result {
   template <bool UseJIT>
   match_result(context<UseJIT> const& ctx);
 
-  match_result(match_result const& other) {
+  /**
+   * @brief other の内容をこのオブジェクトにコピーする共通ヘルパ
+   * @param other コピー元
+   */
+  void copy_from(match_result const& other) {
     if (other.holder && other.holder->code) {
       holder = std::make_shared<data_holder>(other.holder->code);
       copy_ovector(holder->ovector, holder->data, other.holder->ovector, other.holder->data);
       holder->target = other.holder->target;
+    } else {
+      holder.reset();
     }
   }
 
+  match_result(match_result const& other) { copy_from(other); }
+
   auto operator=(match_result const& other) -> match_result& {
     if (this != &other) {
-      if (other.holder && other.holder->code) {
-        holder = std::make_shared<data_holder>(other.holder->code);
-        copy_ovector(holder->ovector, holder->data, other.holder->ovector, other.holder->data);
-        holder->target = other.holder->target;
-      } else {
-        holder.reset();
-      }
+      copy_from(other);
     }
     return *this;
   }
@@ -748,7 +696,13 @@ struct match_result {
   }
 
   auto     operator[](size_t const index) const noexcept -> std::string_view { return get(index); }
-  auto     operator[](int const index) const noexcept -> std::string_view { return get(static_cast<size_t>(index)); }
+  /// @brief 負値を渡すと std::out_of_range を投げる
+  auto operator[](int const index) const -> std::string_view {
+    if (index < 0) {
+      throw std::out_of_range{"match_result::operator[]: negative index"};
+    }
+    return get(static_cast<size_t>(index));
+  }
   auto     operator[](std::string_view const name) const noexcept -> std::string_view { return get(name); }
   explicit operator bool() const noexcept { return holder && holder->data; }
 
@@ -1047,7 +1001,10 @@ public:
     if (rc == PCRE2_ERROR_NOMATCH) {
       return 0;
     }
-    return std::unexpected{"Match error."};
+    // PCRE2 エラーコードとメッセージを含めてエラーを返す
+    auto msg = std::array<PCRE2_UCHAR8, 256uz>{};
+    pcre2_get_error_message(rc, msg.data(), msg.size());
+    return std::unexpected{"Match error at code " + std::to_string(rc) + ": " + reinterpret_cast<char const*>(msg.data())};
   }
 
   /**
@@ -1060,7 +1017,7 @@ public:
    * @return std::expected<int, std::string> マッチしたグループ数、マッチしなかった場合は0、エラーの場合はエラーメッセージを返す
    */
   auto find(std::string_view const target, match_result& mr, size_t const start = 0uz, unsigned int const option = 0) const -> std::expected<int, std::string> {
-    if (not mr.holder) {
+    if (not mr.holder || not mr.holder->data) {
       return std::unexpected{"match_result not initialized."};
     }
     mr.set_target(target);
@@ -1108,17 +1065,27 @@ public:
   /**
    * @brief 完全一致するかどうかを判定する便利メソッド
    *
+   * mr が未初期化の場合は自動で初期化してから検索する。
+   * JIT は PCRE2_ENDANCHORED をサポートしないため、マッチ終端位置を手動検証する。
+   *
    * @param target 判定対象の文字列
-   * @param mr マッチ結果を格納するオブジェクト
+   * @param mr マッチ結果を格納するオブジェクト（未初期化でも可）
    * @param option マッチオプション
    * @return std::expected<bool, std::string> 完全一致する場合はtrue、それ以外はfalse
    */
   auto match(std::string_view const target, match_result& mr, unsigned int const option = 0) const -> std::expected<bool, std::string> {
-    auto const rc = find(target, mr, 0uz, option | PCRE2_ANCHORED | PCRE2_ENDANCHORED);
+    if (not mr.holder || not mr.holder->data) {
+      mr = match_result{*this};
+    }
+    // PCRE2_ANCHORED で先頭固定。JIT は PCRE2_ENDANCHORED 非対応のため終端を手動検証する
+    auto const rc = find(target, mr, 0uz, option | PCRE2_ANCHORED);
     if (not rc) {
       return std::unexpected{rc.error()};
     }
-    return *rc > 0;
+    if (*rc <= 0) {
+      return false;
+    }
+    return mr.end_pos() == target.size();
   }
 
   /**
@@ -1174,33 +1141,54 @@ public:
   }
 
   /**
-   * @brief ラムダ式を用いた動的置換
+   * @brief ラムダ式を用いた動的置換 (C7: expected 統一版)
    * @param target 対象文字列
    * @param callback マッチ結果を受け取り置換後の文字列を返す関数
-   * @return 置換後の文字列
+   * @return std::expected<std::string, std::string> 置換後の文字列またはエラー
    */
   template <typename F>
     requires std::invocable<F, match_result const&>
-  auto replace(std::string_view const target, F&& callback) const -> std::string {
+  auto replace(std::string_view const target, F&& callback) const -> std::expected<std::string, std::string> {
+    if (not code) {
+      return std::unexpected{"Not compiled."};
+    }
     auto result = std::string{};
     result.reserve(target.size());
 
     auto last_pos = 0uz;
     for (auto& mr : find_all(target)) {
       auto const start = mr.start_pos();
-      auto const end = mr.end_pos();
+      auto const end   = mr.end_pos();
       result.append(target.substr(last_pos, start - last_pos));
       result.append(callback(mr));
+      // find_all のイテレータがゼロ幅マッチでも自動的に 1 文字進めるため、
+      // ここでは last_pos を end に設定するだけでよい（二重インクリメント不要）
       last_pos = end;
-      // 0長マッチ対策: 同じ位置でマッチし続けるのを防ぐ
-      if (start == end) {
-        last_pos = (last_pos < target.size()) ? last_pos + 1uz : last_pos;
-      }
     }
     if (last_pos < target.size()) {
       result.append(target.substr(last_pos));
     }
     return result;
+  }
+
+  /**
+   * @brief ラムダ式を用いた動的置換 (throw 版)
+   *
+   * `replace(target, callback)` の expected を unwrap して返す便利版。
+   * コンパイルエラーなど内部エラー発生時は std::runtime_error を送出する。
+   *
+   * @param target 対象文字列
+   * @param callback マッチ結果を受け取り置換後の文字列を返す関数
+   * @return 置換後の文字列
+   */
+  template <typename F>
+    requires std::invocable<F, match_result const&>
+  auto replace_unchecked(std::string_view const target, F&& callback) const -> std::string {
+    auto res = replace(target, std::forward<F>(callback));
+    if (not res) {
+      throw std::runtime_error{res.error()};
+    }
+    return std::move(*res);
   }
 
   /**
@@ -1284,19 +1272,6 @@ using nttp_find_result_t = nttp_match_result<Pattern, UseJIT>;
 
 namespace detail {
 template <fixed_string Pattern, bool UseJIT, size_t... Is>
-auto make_nttp_result_impl(match_result const& mr, std::index_sequence<Is...>) -> nttp_find_result_t<Pattern, UseJIT> {
-  return {
-    .matched = static_cast<bool>(mr),
-    .groups = {mr.get(Is)...}
-  };
-}
-
-template <fixed_string Pattern, bool UseJIT>
-auto make_nttp_result(match_result const& mr) -> nttp_find_result_t<Pattern, UseJIT> {
-  return make_nttp_result_impl<Pattern, UseJIT>(mr, std::make_index_sequence<nttp_group_count_v<Pattern>>{});
-}
-
-template <fixed_string Pattern, bool UseJIT, size_t... Is>
 auto make_nttp_result_raw_impl(pcre2_match_data* md, std::string_view target, std::index_sequence<Is...>) -> nttp_find_result_t<Pattern, UseJIT> {
   auto const* ovector = pcre2_get_ovector_pointer(md);
   auto const  count   = pcre2_get_ovector_count(md);
@@ -1373,23 +1348,48 @@ auto get(nttp_match_result<Pattern, UseJIT> const& result) noexcept {
 }
 
 /**
- * @brief NTTP 版 find：正規表現をテンプレート引数で指定する検索
+ * @brief NTTP 版 find：正規表現をテンプレート引数で指定する検索 (C7: expected 版)
  *
- * 与えられたパターンで最初のマッチを検索し、結果をオブジェクトで返します。
- * パターンコンパイルやマッチ実行で失敗した場合は std::runtime_error を送出します。
+ * 与えられたパターンで最初のマッチを検索し、結果を expected で返します。
+ * パターンコンパイルやマッチ実行で失敗した場合は std::unexpected を返します。
+ *
+ * @see find_unchecked 例外版
  */
 template <fixed_string Pattern, bool UseJIT = true>
-auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) -> nttp_find_result_t<Pattern, UseJIT> {
-  auto const& ctx = detail::get_nttp_context<Pattern, UseJIT>();
-  auto*       md  = detail::get_tls_match_data(ctx.get_code());
-  auto const  res = ctx.find(target, md, start, option);
+auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0)
+  -> std::expected<nttp_find_result_t<Pattern, UseJIT>, std::string> {
+  // コンパイルエラーを例外ではなく unexpected として返す
+  context<UseJIT> const* ctx_ptr = nullptr;
+  try {
+    ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
+  } catch (std::runtime_error const& e) {
+    return std::unexpected{std::string{e.what()}};
+  }
+  auto*      md  = detail::get_tls_match_data(ctx_ptr->get_code());
+  auto const res = ctx_ptr->find(target, md, start, option);
   if (not res) {
-    throw std::runtime_error{"NTTP find match error: " + res.error()};
+    return std::unexpected{res.error()};
   }
   if (*res <= 0) {
-    return {};
+    return nttp_find_result_t<Pattern, UseJIT>{};
   }
   return detail::make_nttp_result_raw<Pattern, UseJIT>(md, target);
+}
+
+/**
+ * @brief NTTP 版 find の throw 版
+ *
+ * `find<Pattern>()` の expected を unwrap して返す便利版。
+ * エラー発生時は std::runtime_error を送出する。
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+auto find_unchecked(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0)
+  -> nttp_find_result_t<Pattern, UseJIT> {
+  auto res = find<Pattern, UseJIT>(target, start, option);
+  if (not res) {
+    throw std::runtime_error{"NTTP find error: " + res.error()};
+  }
+  return std::move(*res);
 }
 
 /**
@@ -1428,16 +1428,18 @@ struct nttp_regex {
   }
 
   /**
-   * @brief 完全一致を確認
+   * @brief 完全一致を確認 (C7: expected 版)
+   * @return std::expected<bool, std::string> 完全一致するか、エラーメッセージ
    */
-  auto match(std::string_view const target, unsigned int const option = 0) const {
-    auto const& ctx = detail::get_nttp_context<Pattern, UseJIT>();
-    match_result mr;
-    auto const res = ctx.match(target, mr, option);
-    if (not res) {
-      throw std::runtime_error{"NTTP match error: " + res.error()};
+  auto match(std::string_view const target, unsigned int const option = 0) const -> std::expected<bool, std::string> {
+    context<UseJIT> const* ctx_ptr = nullptr;
+    try {
+      ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
+    } catch (std::runtime_error const& e) {
+      return std::unexpected{std::string{e.what()}};
     }
-    return *res;
+    auto mr = match_result{*ctx_ptr};
+    return ctx_ptr->match(target, mr, option);
   }
 };
 

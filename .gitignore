@@ -48,9 +48,6 @@ compile_commands.json
 *.eps
 *.svg
 
-build*.sh
-test.sh
-
 *.log
 *.csv
 

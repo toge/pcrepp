@@ -43,13 +43,16 @@ TEST_CASE("context::match returns false for partial match", "[match]") {
 TEST_CASE("nttp_regex::match returns true on exact match", "[match][nttp]") {
   auto const re = pcrepp::compile<R"(hello world)">();
   auto const res = re.match("hello world");
-  CHECK(res);
+  // C7: nttp_regex::match は expected<bool> を返す
+  REQUIRE(res.has_value());
+  CHECK(*res);
 }
 
 TEST_CASE("nttp_regex::match returns false on partial match", "[match][nttp]") {
   auto const re = pcrepp::compile<R"(hello)">();
   auto const res = re.match("hello world");
-  CHECK_FALSE(res);
+  REQUIRE(res.has_value());
+  CHECK_FALSE(*res);
 }
 
 // ========================================
@@ -171,7 +174,9 @@ TEST_CASE("replace callback with zero-width end anchor", "[replace][zero_width]"
   auto const result = ctx.replace("abc", [](auto const&) -> std::string {
     return "!";
   });
-  CHECK(result == "abc!");  // match at end, not infinite
+  // C7: replace(callback) は expected<string> を返す
+  REQUIRE(result.has_value());
+  CHECK(*result == "abc!");  // match at end, not infinite
 }
 
 TEST_CASE("replace callback with zero-width lookahead", "[replace][zero_width]") {
@@ -179,7 +184,8 @@ TEST_CASE("replace callback with zero-width lookahead", "[replace][zero_width]")
   auto const result = ctx.replace("abcd", [](auto const&) -> std::string {
     return "X";
   });
-  CHECK(result == "aXbXcd");
+  REQUIRE(result.has_value());
+  CHECK(*result == "aXbXcd");
 }
 
 // ========================================

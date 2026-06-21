@@ -67,7 +67,8 @@ TEST_CASE("Basic usage from user example", "[basic]") {
             return std::format("{}({} USD)", res["name"], value / 100);
         });
 
-        CHECK(dynamic_res == "Apple(1 USD), Banana(2 USD)");
+        REQUIRE(dynamic_res.has_value());
+        CHECK(*dynamic_res == "Apple(1 USD), Banana(2 USD)");
     }
 
     SECTION("Split") {
