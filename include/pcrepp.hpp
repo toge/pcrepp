@@ -54,6 +54,29 @@ namespace pcrepp {
 inline constexpr unsigned int no_utf_check = PCRE2_NO_UTF_CHECK;
 
 /**
+ * @brief pcre2_substitute の option 定数群（E6）
+ *
+ * `context::replace(target, replacement, option)` の `option` に組み合わせて使用する。
+ * ```cpp
+ * ctx.replace(target, "$1", pcrepp::substitute_flags::global | pcrepp::substitute_flags::extended);
+ * ```
+ */
+namespace substitute_flags {
+  /// @brief 全箇所を置換する（デフォルト動作）
+  inline constexpr unsigned int global           = PCRE2_SUBSTITUTE_GLOBAL;
+  /// @brief 置換文字列で $1、${1}、\U...\E 等の拡張構文を有効にする
+  inline constexpr unsigned int extended         = PCRE2_SUBSTITUTE_EXTENDED;
+  /// @brief バッファ不足時に必要サイズを返す
+  inline constexpr unsigned int overflow_length  = PCRE2_SUBSTITUTE_OVERFLOW_LENGTH;
+  /// @brief 置換後の文字列のみ返す（マッチしない部分を除外）
+  inline constexpr unsigned int replacement_only = PCRE2_SUBSTITUTE_REPLACEMENT_ONLY;
+  /// @brief 未定義の名前付きキャプチャを空文字列として扱う
+  inline constexpr unsigned int unknown_unset    = PCRE2_SUBSTITUTE_UNKNOWN_UNSET;
+  /// @brief 未マッチのキャプチャグループを空文字列として扱う
+  inline constexpr unsigned int unset_empty      = PCRE2_SUBSTITUTE_UNSET_EMPTY;
+}  // namespace substitute_flags
+
+/**
  * @struct fixed_string
  * @brief NTTP用のコンパイル時文字列ラッパー
  *
@@ -559,7 +582,7 @@ inline constexpr auto use_tls = use_tls_t{};
 template <bool UseJIT>
 struct iterator;
 
-template <bool UseJIT>
+template <bool UseJIT = true, unsigned JITFlags = PCRE2_JIT_COMPLETE>
 struct context;
 
 /**
@@ -580,6 +603,11 @@ struct match_result {
       }
     }
 
+    /// @brief 既存の pcre2_match_data を受け取るコンストラクタ（E11 oversized match_data 用）
+    data_holder(pcre2_code const* c, pcre2_match_data* d) : code(c), data(d) {
+      ovector = data ? pcre2_get_ovector_pointer(data) : nullptr;
+    }
+
     ~data_holder() {
       if (data) {
         pcre2_match_data_free(data);
@@ -589,8 +617,10 @@ struct match_result {
   std::shared_ptr<data_holder> holder;
 
   match_result() = default;
-  template <bool UseJIT>
-  match_result(context<UseJIT> const& ctx);
+  template <bool UseJIT, unsigned JITFlags>
+  match_result(context<UseJIT, JITFlags> const& ctx);
+  template <bool UseJIT, unsigned JITFlags>
+  match_result(context<UseJIT, JITFlags> const& ctx, size_t oversized_capture_count);
 
   /**
    * @brief other の内容をこのオブジェクトにコピーする共通ヘルパ
@@ -852,7 +882,7 @@ private:
   }
 
   template <bool UseJIT> friend struct iterator;
-  template <bool UseJIT> friend struct context;
+  template <bool UseJIT, unsigned JITFlags> friend struct context;
 };
 
 namespace detail {
@@ -948,11 +978,15 @@ struct match_range : std::ranges::view_interface<match_range<UseJIT>> {
 /**
  * @struct context
  * @brief コンパイル済み正規表現を管理する構造体
+ *
+ * @tparam UseJIT JIT コンパイルを使用するか（デフォルト true）
+ * @tparam JITFlags JIT コンパイルフラグ（デフォルト PCRE2_JIT_COMPLETE）。UseJIT=false 時は無視される。
  */
-template <bool UseJIT = true>
+template <bool UseJIT, unsigned JITFlags>
 struct context {
 private:
-  pcre2_code* code = nullptr;
+  pcre2_code*          code      = nullptr;
+  pcre2_match_context* match_ctx = nullptr;  ///< 制限設定用。nullptr は「制限なし」
   friend struct match_result;
 
 public:
@@ -962,13 +996,18 @@ public:
       throw std::runtime_error{res.error()};
     }
   }
-  ~context() { release(); }
+  ~context() {
+    release();
+    if (match_ctx) {
+      pcre2_match_context_free(match_ctx);
+    }
+  }
 
   /**
    * @brief 例外を投げないファクトリメソッド
    */
-  static auto create(std::string_view const src, unsigned int option = 0) -> std::expected<context<UseJIT>, std::string> {
-    auto ctx = context<UseJIT>{};
+  static auto create(std::string_view const src, unsigned int option = 0) -> std::expected<context<UseJIT, JITFlags>, std::string> {
+    auto ctx = context<UseJIT, JITFlags>{};
     if (auto const res = ctx.compile(src, option); not res) {
       return std::unexpected{res.error()};
     }
@@ -978,12 +1017,18 @@ public:
   context(context const&) = delete;
   auto operator=(context const&) -> context& = delete;
 
-  context(context&& other) noexcept : code(other.code) { other.code = nullptr; }
+  context(context&& other) noexcept : code(other.code), match_ctx(other.match_ctx) {
+    other.code      = nullptr;
+    other.match_ctx = nullptr;
+  }
   auto operator=(context&& other) noexcept -> context& {
     if (this != &other) {
       release();
-      code       = other.code;
-      other.code = nullptr;
+      if (match_ctx) { pcre2_match_context_free(match_ctx); }
+      code            = other.code;
+      match_ctx       = other.match_ctx;
+      other.code      = nullptr;
+      other.match_ctx = nullptr;
     }
     return *this;
   }
@@ -1024,7 +1069,12 @@ public:
       return std::unexpected{"Compile error at offset " + std::to_string(eo) + ": " + reinterpret_cast<char const*>(msg.data())};
     }
     if constexpr (UseJIT) {
-      pcre2_jit_compile(c, PCRE2_JIT_COMPLETE);
+      if (auto const jrc = pcre2_jit_compile(c, JITFlags); jrc < 0) {
+        auto msg = std::array<PCRE2_UCHAR8, 256uz>{};
+        pcre2_get_error_message(jrc, msg.data(), msg.size());
+        pcre2_code_free(c);
+        return std::unexpected{"JIT compile error: " + std::string{reinterpret_cast<char const*>(msg.data())}};
+      }
     }
     this->code = c;
     return {};
@@ -1045,6 +1095,94 @@ public:
     return detail::lookup_named_capture(code, name);
   }
 
+  // ================================================================
+  // E5: パターン情報クエリ
+  // ================================================================
+
+  /// @brief キャプチャグループ数を返す（全体マッチは含まない）
+  auto capture_count() const noexcept -> uint32_t {
+    if (not code) return 0u;
+    auto count = uint32_t{};
+    std::ignore = pcre2_pattern_info(code, PCRE2_INFO_CAPTURECOUNT, &count);
+    return count;
+  }
+
+  /// @brief 名前付きキャプチャグループの一覧を返す（名前、インデックス）のペアのベクター
+  auto named_captures() const -> std::vector<std::pair<std::string, int>> {
+    if (not code) return {};
+    auto name_count      = uint32_t{};
+    auto name_entry_size = uint32_t{};
+    pcre2_pattern_info(code, PCRE2_INFO_NAMECOUNT, &name_count);
+    pcre2_pattern_info(code, PCRE2_INFO_NAMEENTRYSIZE, &name_entry_size);
+    PCRE2_SPTR name_table = nullptr;
+    pcre2_pattern_info(code, PCRE2_INFO_NAMETABLE, &name_table);
+    auto result = std::vector<std::pair<std::string, int>>{};
+    result.reserve(name_count);
+    for (auto i = 0u; i < name_count; ++i) {
+      auto const* entry = name_table + i * name_entry_size;
+      auto const  idx   = static_cast<int>((static_cast<unsigned>(entry[0]) << 8u) | static_cast<unsigned>(entry[1]));
+      auto const  name  = std::string{reinterpret_cast<char const*>(entry + 2)};
+      result.emplace_back(name, idx);
+    }
+    return result;
+  }
+
+  /// @brief コンパイル済みパターンのバイトサイズを返す
+  auto pattern_size() const noexcept -> size_t {
+    if (not code) return 0uz;
+    auto sz = size_t{};
+    std::ignore = pcre2_pattern_info(code, PCRE2_INFO_SIZE, &sz);
+    return sz;
+  }
+
+  /// @brief JIT コンパイル済みコードのバイトサイズを返す（JIT 無効時は 0）
+  auto jit_size() const noexcept -> size_t {
+    if (not code) return 0uz;
+    auto sz = size_t{};
+    std::ignore = pcre2_pattern_info(code, PCRE2_INFO_JITSIZE, &sz);
+    return sz;
+  }
+
+  /// @brief コンパイル時に有効だったオプションフラグを返す
+  auto options() const noexcept -> uint32_t {
+    if (not code) return 0u;
+    auto opts = uint32_t{};
+    std::ignore = pcre2_pattern_info(code, PCRE2_INFO_ALLOPTIONS, &opts);
+    return opts;
+  }
+
+  // ================================================================
+  // E3 / E10: マッチ制限・オフセット制限
+  // ================================================================
+
+  /// @brief マッチ再帰回数の上限を設定する（バックトラック制限）
+  auto set_match_limit(uint32_t const limit) -> context& {
+    if (not match_ctx) { match_ctx = pcre2_match_context_create(nullptr); }
+    pcre2_set_match_limit(match_ctx, limit);
+    return *this;
+  }
+
+  /// @brief バックトラックスタック深度の上限を設定する
+  auto set_depth_limit(uint32_t const limit) -> context& {
+    if (not match_ctx) { match_ctx = pcre2_match_context_create(nullptr); }
+    pcre2_set_depth_limit(match_ctx, limit);
+    return *this;
+  }
+
+  /// @brief ヒープメモリ使用量の上限を設定する（キロバイト単位）
+  auto set_heap_limit(uint32_t const limit) -> context& {
+    if (not match_ctx) { match_ctx = pcre2_match_context_create(nullptr); }
+    pcre2_set_heap_limit(match_ctx, limit);
+    return *this;
+  }
+
+  /// @brief マッチ検索のオフセット上限を設定する（バイト単位）
+  auto set_offset_limit(size_t const limit) -> context& {
+    if (not match_ctx) { match_ctx = pcre2_match_context_create(nullptr); }
+    pcre2_set_offset_limit(match_ctx, static_cast<PCRE2_SIZE>(limit));
+    return *this;
+  }
+
   /**
    * @brief 文字列に対して正規表現を検索し、マッチ結果を低レベルな pcre2_match_data に格納する
    *
@@ -1063,9 +1201,9 @@ public:
     }
     auto const rc = [&] -> int {
       if constexpr (UseJIT) {
-        return pcre2_jit_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, nullptr);
+        return pcre2_jit_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
       } else {
-        return pcre2_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, nullptr);
+        return pcre2_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
       }
     }();
     if (rc >= 0) {
@@ -1657,8 +1795,18 @@ constexpr auto compile() {
 #endif
 #endif // PCREPP_HAS_FROZENCHARS
 
-template <bool UseJIT>
-inline match_result::match_result(context<UseJIT> const& ctx) : match_result(ctx.code) {}
+template <bool UseJIT, unsigned JITFlags>
+inline match_result::match_result(context<UseJIT, JITFlags> const& ctx) : match_result(ctx.code) {}
+
+template <bool UseJIT, unsigned JITFlags>
+inline match_result::match_result(context<UseJIT, JITFlags> const& ctx, size_t oversized_capture_count) {
+  if (ctx.code && oversized_capture_count > 0uz) {
+    auto* data = pcre2_match_data_create(static_cast<uint32_t>(oversized_capture_count), nullptr);
+    if (data) {
+      holder = std::make_shared<data_holder>(ctx.code, data);
+    }
+  }
+}
 
 template <bool UseJIT>
 inline iterator<UseJIT>::iterator(context<UseJIT> const* c, std::string_view t, size_t p, unsigned int o, bool end) : ctx(c), target(t), pos(p), option(o), is_end(end) {

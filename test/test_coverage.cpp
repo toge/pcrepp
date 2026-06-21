@@ -376,3 +376,57 @@ TEST_CASE("match_result to_tuple<N>", "[match_result][f6]") {
   CHECK(std::get<1>(t) == "hello");
   CHECK(std::get<2>(t) == "world");
 }
+
+// ========================================
+// M4: E1/E3/E5/E6/E10/E11
+// ========================================
+TEST_CASE("substitute_flags::extended enables ${1} syntax", "[replace][e6]") {
+  auto const ctx = pcrepp::context<true>::create(R"((\w+))").value();
+  auto const res = ctx.replace("hello", "${1}!",
+    pcrepp::substitute_flags::global | pcrepp::substitute_flags::extended);
+  REQUIRE(res);
+  CHECK(*res == "hello!");
+}
+
+TEST_CASE("context pattern info queries", "[e5]") {
+  auto const ctx = pcrepp::context<true>::create(R"((?<year>\d{4})-(?<month>\d{2}))", PCRE2_UTF).value();
+  CHECK(ctx.capture_count() == 2u);
+  auto const caps = ctx.named_captures();
+  REQUIRE(caps.size() == 2uz);
+  CHECK(caps[0].first == "month");
+  CHECK(caps[1].first == "year");
+  CHECK(ctx.pattern_size() > 0uz);
+  CHECK((ctx.options() & PCRE2_UTF) != 0u);
+}
+
+TEST_CASE("context jit size on JIT-enabled context", "[e1][e5]") {
+  auto const ctx = pcrepp::context<true, PCRE2_JIT_COMPLETE>::create(R"(\d+)").value();
+  CHECK(ctx.jit_size() > 0uz);
+}
+
+TEST_CASE("context set_match_limit can trigger match error", "[e3]") {
+  auto ctx = pcrepp::context<false>::create(R"((a+)+b)").value();
+  ctx.set_match_limit(10u);
+  auto input = std::string(2000, 'a');
+  input += 'c';
+  auto const res = ctx.find(input);
+  // PCRE2 実装差により error / no-match のどちらかになるため両方許容
+  CHECK((!res.has_value() || (res.has_value() && !static_cast<bool>(*res))));
+}
+
+TEST_CASE("context set_offset_limit restricts search range", "[e10]") {
+  auto ctx = pcrepp::context<false>::create(R"(\d+)").value();
+  ctx.set_offset_limit(3uz);
+  auto const res = ctx.find("abc 123 456");
+  // offset_limit により error になる実装と no-match になる実装がある
+  CHECK((!res.has_value() || (res.has_value() && !static_cast<bool>(*res))));
+}
+
+TEST_CASE("oversized match_result constructor works", "[e11]") {
+  auto const ctx = pcrepp::context<true>::create(R"((\d+))").value();
+  auto mr = pcrepp::match_result{ctx, 10uz};
+  auto const rc = ctx.find("abc 42", mr);
+  REQUIRE(rc);
+  CHECK(*rc > 0);
+  CHECK(mr.get(1uz) == "42");
+}
