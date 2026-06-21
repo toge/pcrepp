@@ -266,3 +266,62 @@ TEST_CASE("start_pos and end_pos on empty result return 0", "[match_result]") {
   CHECK(mr.start_pos() == 0uz);
   CHECK(mr.end_pos() == 0uz);
 }
+
+// ========================================
+// F1: find_all with start offset
+// ========================================
+TEST_CASE("find_all with start offset skips prefix", "[find_all][f1]") {
+  auto const ctx = pcrepp::context<true>::create(R"(\d+)").value();
+  // "abc 123 456 789" — offset 8 から開始すると 456 と 789 のみ
+  auto count = 0uz;
+  for ([[maybe_unused]] auto& mr : ctx.find_all("abc 123 456 789", 0u, 8uz)) {
+    ++count;
+  }
+  CHECK(count == 2uz);
+}
+
+TEST_CASE("find_all with start offset 0 finds all", "[find_all][f1]") {
+  auto const ctx = pcrepp::context<true>::create(R"(\d+)").value();
+  auto count = 0uz;
+  for ([[maybe_unused]] auto& mr : ctx.find_all("1 2 3", 0u, 0uz)) {
+    ++count;
+  }
+  CHECK(count == 3uz);
+}
+
+// ========================================
+// F2: split with option
+// ========================================
+TEST_CASE("split with PCRE2_CASELESS option", "[split][f2]") {
+  auto const ctx = pcrepp::context<true>::create(R"(AND)").value();
+  auto const parts = ctx.split("apple AND banana", PCRE2_CASELESS);
+  REQUIRE(parts.size() == 2uz);
+  CHECK(parts[0] == "apple ");
+  CHECK(parts[1] == " banana");
+}
+
+TEST_CASE("split with option default 0 works as before", "[split][f2]") {
+  auto const ctx = pcrepp::context<true>::create(R"(,)").value();
+  auto const parts = ctx.split("a,b,c");
+  REQUIRE(parts.size() == 3uz);
+  CHECK(parts[0] == "a");
+  CHECK(parts[1] == "b");
+  CHECK(parts[2] == "c");
+}
+
+// ========================================
+// F5: context::match without match_result arg
+// ========================================
+TEST_CASE("context::match without match_result arg exact match", "[match][f5]") {
+  auto const ctx = pcrepp::context<true>::create(R"(hello world)").value();
+  auto const res = ctx.match("hello world");
+  REQUIRE(res.has_value());
+  CHECK(*res);
+}
+
+TEST_CASE("context::match without match_result arg partial mismatch", "[match][f5]") {
+  auto const ctx = pcrepp::context<true>::create(R"(hello)").value();
+  auto const res = ctx.match("hello world");
+  REQUIRE(res.has_value());
+  CHECK_FALSE(*res);
+}

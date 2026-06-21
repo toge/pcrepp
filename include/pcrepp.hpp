@@ -1195,31 +1195,45 @@ public:
    * @brief 全てのマッチ箇所をイテレートするためのrangeを返す
    *
    * @param target 検索対象の文字列
-   * @param option 検索オプション
+   * @param option 検索オプション (PCRE2_NOTBOL 等)
+   * @param start 検索開始バイト位置（デフォルト 0）
    * @return match_range<UseJIT>
    */
-  auto find_all(std::string_view const target, unsigned int const option = 0) const -> match_range<UseJIT> {
-    return {iterator<UseJIT>(this, target, 0uz, option, false), iterator<UseJIT>(this, target, 0uz, option, true)};
+  auto find_all(std::string_view const target, unsigned int const option = 0, size_t const start = 0uz) const -> match_range<UseJIT> {
+    return {
+      iterator<UseJIT>(this, target, start, option, false),
+      iterator<UseJIT>(this, target, start, option, true)
+    };
   }
 
   /**
    * @brief 正規表現を区切り文字列として文字列を分割する
    *
    * @param target 分割対象の文字列
-   * @return std::vector<std::string_view> 分割された文字列 区切り文字列がなければtarget全体が1要素のベクター
+   * @param option 検索オプション (PCRE2_CASELESS 等)
+   * @return std::vector<std::string_view> 分割された文字列。区切りがなければ target 全体が 1 要素
    */
-  auto split(std::string_view const target) const -> std::vector<std::string_view> {
+  auto split(std::string_view const target, unsigned int const option = 0) const -> std::vector<std::string_view> {
     auto res  = std::vector<std::string_view>{};
-
     auto last = 0uz;
-    for (auto& mr : find_all(target)) {
-      auto const start = mr.start_pos();
-      auto const end = mr.end_pos();
-      res.push_back(target.substr(last, start - last));
-      last = end;
+    for (auto& mr : find_all(target, option)) {
+      res.push_back(target.substr(last, mr.start_pos() - last));
+      last = mr.end_pos();
     }
     res.push_back(target.substr(last));
     return res;
+  }
+
+  /**
+   * @brief 完全一致するかどうかを判定する便利メソッド（match_result 不要版）
+   *
+   * @param target 判定対象の文字列
+   * @param option マッチオプション
+   * @return std::expected<bool, std::string> 完全一致する場合はtrue
+   */
+  auto match(std::string_view const target, unsigned int const option = 0) const -> std::expected<bool, std::string> {
+    auto mr = match_result{*this};
+    return match(target, mr, option);
   }
 };
 
