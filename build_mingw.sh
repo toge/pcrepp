@@ -1,6 +1,6 @@
 #! /bin/sh
 
-if [ "$(uname -m)" == "aarch64" ]; then
+if [ "$(uname -m)" = "aarch64" ]; then
     export CXXFLAG="-O3 -mcpu=native"
     export CFLAG="-O3 -mcpu=native"
 else
@@ -24,7 +24,7 @@ if [ $RET -ne 0 ]; then
     exit $RET;
 fi
 
-cmake -B build_mingw64 -DSTATIC=ON -DSTRIP=ON -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release -S .
+cmake -B build_mingw64 -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_FLAGS=${CXXFLAG}" "-DCMAKE_C_FLAGS=${CFLAG}" -S .
 RET=$?
 if [ $RET -ne 0 ]; then
     exit $RET;
