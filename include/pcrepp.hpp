@@ -1314,11 +1314,13 @@ public:
     auto outlen = target.size() + (target.size() / 5uz) + replacement.size() + 256uz;
     auto buffer = std::string(outlen, '\0');
     auto blen   = outlen;
+    auto constexpr overflow_retry_flag = PCRE2_SUBSTITUTE_OVERFLOW_LENGTH;
+    auto const substitute_option       = option | overflow_retry_flag;
     auto const rc = pcre2_substitute(
       code,
       reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(),
       0uz,
-      option,
+      substitute_option,
       nullptr,
       nullptr,
       reinterpret_cast<PCRE2_SPTR8>(replacement.data()), replacement.size(),
@@ -1336,7 +1338,7 @@ public:
         code,
         reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(),
         0uz,
-        option,
+        substitute_option,
         nullptr,
         nullptr,
         reinterpret_cast<PCRE2_SPTR8>(replacement.data()), replacement.size(),
