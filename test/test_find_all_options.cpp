@@ -82,9 +82,37 @@ TEST_CASE("find_all_frozen with options", "[frozenchars][find_all][options]") {
 
 TEST_CASE("NTTP find_all with options", "[nttp][find_all][options]") {
     using namespace pcrepp;
-    std::string_view target = "abc";
-    
     auto results = pcrepp::find_all<"^abc">("abc", PCRE2_NOTBOL);
     CHECK(results.begin() == results.end());
 }
 
+TEST_CASE("option set covers multiline dotall extended noteol", "[options][h4]") {
+    auto const multiline_ctx = pcrepp::context<>::create(R"(^\w+)", PCRE2_MULTILINE).value();
+    auto multiline_count = 0uz;
+    for ([[maybe_unused]] auto const& mr : multiline_ctx.find_all("foo\nbar\nbaz")) {
+        ++multiline_count;
+    }
+    CHECK(multiline_count == 3uz);
+
+    auto const dotall_ctx = pcrepp::context<>::create(R"(a.b)", PCRE2_DOTALL).value();
+    auto const dotall_res = dotall_ctx.find("a\nb");
+    REQUIRE(dotall_res);
+    CHECK(dotall_res->get(0uz) == "a\nb");
+
+    auto const extended_ctx = pcrepp::context<>::create(R"(a \s+ b)", PCRE2_EXTENDED).value();
+    auto const extended_res = extended_ctx.find("a   b");
+    REQUIRE(extended_res);
+    CHECK(extended_res->get(0uz) == "a   b");
+
+    auto const noteol_ctx = pcrepp::context<>::create(R"(\d+$)").value();
+    auto const noteol_res = noteol_ctx.find("123", 0uz, PCRE2_NOTEOL);
+    REQUIRE(noteol_res);
+    CHECK_FALSE(static_cast<bool>(*noteol_res));
+}
+
+TEST_CASE("no_utf_check constant usage", "[options][h15]") {
+    auto const ctx = pcrepp::context<>::create(R"(\w+)", PCRE2_UTF).value();
+    auto const res = ctx.find("hello", 0uz, pcrepp::no_utf_check);
+    REQUIRE(res);
+    CHECK(res->get(0uz) == "hello");
+}

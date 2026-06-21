@@ -154,3 +154,26 @@ TEST_CASE("nttp_match_result formatter", "[nttp][f8]") {
   auto const s = std::format("{}", res);
   CHECK(s == "[matched, age:30, age, 30]");
 }
+
+TEST_CASE("NTTP API with UseJIT=false", "[nttp_find][h6]") {
+  auto const res = pcrepp::find<R"((\d+))", false>("abc 42");
+  REQUIRE(res);
+  CHECK(res->get<1>() == "42");
+
+  auto count = 0uz;
+  for ([[maybe_unused]] auto const& t : pcrepp::find_all<R"(\d+)", false>("1 2 3")) {
+    ++count;
+  }
+  CHECK(count == 3uz);
+
+  auto const re = pcrepp::compile<R"((\d+))", false>();
+  auto const match_res = re.match("123");
+  REQUIRE(match_res);
+  CHECK(*match_res);
+}
+
+TEST_CASE("NTTP find with start offset", "[nttp_find][h19]") {
+  auto const res = pcrepp::find<R"((\d+))">("abc 123 456", 8uz);
+  REQUIRE(res);
+  CHECK(res->get<1>() == "456");
+}

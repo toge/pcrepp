@@ -220,3 +220,17 @@ TEST_CASE("NTTP compile API with ASCII pattern on Japanese text", "[japanese][nt
   CHECK(whole == "300円");
   CHECK(price == "300");
 }
+
+TEST_CASE("Unicode property classes with PCRE2_UCP", "[japanese][unicode][h11]") {
+  auto const letter_ctx = pcrepp::context<>::create(R"(\p{L}+)", PCRE2_UTF | PCRE2_UCP).value();
+  auto const letter_res = letter_ctx.find("123日本abc");
+  REQUIRE(letter_res);
+  CHECK(!letter_res->get(0uz).empty());
+
+  auto const han_ctx = pcrepp::context<>::create(R"(\p{Han}+)", PCRE2_UTF | PCRE2_UCP).value();
+  auto han_count = 0uz;
+  for ([[maybe_unused]] auto const& mr : han_ctx.find_all("Hello 日本語 World 漢字")) {
+    ++han_count;
+  }
+  CHECK(han_count >= 1uz);
+}

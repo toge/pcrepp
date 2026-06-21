@@ -1,11 +1,11 @@
 #include "pcrepp.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <atomic>
 #include <thread>
 #include <vector>
 
 TEST_CASE("TLS reuse with use_tls option", "[tls]") {
     using namespace pcrepp;
-    auto re = R"((\w+):(\d+))"_re;
     auto const target = "age:30";
 
     SECTION("Explicit use_tls") {
@@ -78,6 +78,7 @@ TEST_CASE("TLS reuse does not overflow when capture counts shrink", "[tls][stres
         std::ignore = _;
         big_pattern += "(a)";
     }
+
     auto big_target = std::string(80, 'a');
 
     auto const big_ctx_res = context<>::create(big_pattern);
@@ -99,4 +100,29 @@ TEST_CASE("TLS reuse does not overflow when capture counts shrink", "[tls][stres
         REQUIRE(*small_res);
         CHECK((*small_res).get(1) == "123");
     }
+}
+
+TEST_CASE("TLS multithreaded concurrent find", "[tls][multithreaded]") {
+    using namespace pcrepp;
+    auto const ctx1 = context<>::create(R"((\w+):(\d+))").value();
+    auto const ctx2 = context<>::create(R"((\d+))").value();
+    auto const n = 24;
+    auto errors = std::atomic<int>{0};
+    auto threads = std::vector<std::jthread>{};
+    threads.reserve(static_cast<size_t>(n));
+    for (auto const i : std::views::iota(0, n)) {
+        threads.emplace_back([&, i] {
+            auto const& ctx = (i % 2 == 0) ? ctx1 : ctx2;
+            auto const target = (i % 2 == 0) ? "key:42" : "123";
+            for (auto const _ : std::views::iota(0, 200)) {
+                std::ignore = _;
+                auto const res = ctx.find(target, use_tls);
+                if (not res || not *res) {
+                    ++errors;
+                }
+            }
+        });
+    }
+    threads.clear(); // join
+    CHECK(errors.load() == 0);
 }

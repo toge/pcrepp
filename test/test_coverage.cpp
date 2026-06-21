@@ -364,6 +364,15 @@ TEST_CASE("try_get<string_view> named capture", "[match_result][f4]") {
   CHECK_FALSE(no_v.has_value());
 }
 
+TEST_CASE("named capture index consistency", "[match_result][h14]") {
+  auto const ctx = pcrepp::context<>::create(R"((?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2}))").value();
+  auto const res = ctx.find("2024-06-21");
+  REQUIRE(res);
+  CHECK(res->get(1uz) == res->get("year"));
+  CHECK(res->get(2uz) == res->get("month"));
+  CHECK(res->get(3uz) == res->get("day"));
+}
+
 // ========================================
 // F6: match_result::to_tuple<N>
 // ========================================
@@ -429,4 +438,80 @@ TEST_CASE("oversized match_result constructor works", "[e11]") {
   REQUIRE(rc);
   CHECK(*rc > 0);
   CHECK(mr.get(1uz) == "42");
+}
+
+// ========================================
+// M5: H2/H3/H5/H7/H8/H17/H18/H20
+// ========================================
+TEST_CASE("context move and release behavior", "[context][h2]") {
+  auto ctx1 = pcrepp::context<>::create(R"(\d+)").value();
+  auto ctx2 = std::move(ctx1);
+  CHECK(ctx1.get_code() == nullptr);
+  REQUIRE(ctx2.get_code() != nullptr);
+  auto const res = ctx2.find("abc 123");
+  REQUIRE(res);
+  CHECK(res->get(0uz) == "123");
+  ctx2.release();
+  CHECK(ctx2.get_code() == nullptr);
+}
+
+TEST_CASE("match_result move and self assignment", "[match_result][h3]") {
+  auto const ctx = pcrepp::context<>::create(R"((\d+))").value();
+  auto mr1 = ctx.find("abc 42").value();
+  auto mr2 = std::move(mr1);
+  CHECK(mr2.get(1uz) == "42");
+  mr2 = mr2; // self assignment
+  CHECK(mr2.get(1uz) == "42");
+}
+
+TEST_CASE("replace with non-default substitute option", "[replace][h5]") {
+  auto const ctx = pcrepp::context<>::create(R"((\w+))").value();
+  auto const res = ctx.replace("hello", "${1}",
+    pcrepp::substitute_flags::global | pcrepp::substitute_flags::extended);
+  REQUIRE(res);
+  CHECK(*res == "hello");
+}
+
+TEST_CASE("context find with start offset", "[find][h7]") {
+  auto const ctx = pcrepp::context<>::create(R"(\d+)").value();
+  auto const res = ctx.find("abc 123 456", 8uz);
+  REQUIRE(res);
+  CHECK(res->get(0uz) == "456");
+}
+
+TEST_CASE("JIT compile failure path is representable", "[compile][h8]") {
+  // 無効 JIT フラグで失敗経路を通す（環境差を考慮して成功も許容）
+  auto const res = pcrepp::context<true, 0u>::create(R"(\d+)");
+  if (!res) {
+    CHECK(res.error().find("JIT compile error") != std::string::npos);
+  } else {
+    SUCCEED();
+  }
+}
+
+TEST_CASE("runtime create failure exposes error text", "[context][h16]") {
+  auto const res = pcrepp::context<>::create(R"(()");
+  REQUIRE_FALSE(res.has_value());
+  CHECK_FALSE(res.error().empty());
+}
+
+TEST_CASE("match_range view_interface helpers", "[match_range][h17]") {
+  auto const ctx = pcrepp::context<>::create(R"(\d+)").value();
+  auto range = ctx.find_all("1 2 3");
+  CHECK_FALSE(range.empty());
+  CHECK(range.front().get(0uz) == "1");
+}
+
+TEST_CASE("match_result size direct assert", "[match_result][h18]") {
+  auto const ctx = pcrepp::context<>::create(R"((\w+) (\w+))").value();
+  auto const res = ctx.find("hello world");
+  REQUIRE(res);
+  CHECK(res->size() == 3uz);
+}
+
+TEST_CASE("split with empty target", "[split][h20]") {
+  auto const ctx = pcrepp::context<>::create(R"(,)").value();
+  auto const parts = ctx.split("");
+  REQUIRE(parts.size() == 1uz);
+  CHECK(parts[0uz].empty());
 }
