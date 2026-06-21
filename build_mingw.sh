@@ -1,6 +1,6 @@
 #! /bin/sh
 
-if [ "$(uname -m)" = "aarch64" ]; then
+if [ "$(uname -m)" == "aarch64" ]; then
     export CXXFLAG="-O3 -mcpu=native"
     export CFLAG="-O3 -mcpu=native"
 else
