@@ -9,8 +9,8 @@ if [ "$(uname -m)" = "aarch64" ]; then
     export CXXFLAG="-O3 -mcpu=native"
     export CFLAG="-O3 -mcpu=native"
 else
-    export CXXFLAG="-O3 -march=native"
-    export CFLAG="-O3 -march=native"
+    export CXXFLAG="-Ofast -march=native"
+    export CFLAG="-Ofast -march=native"
 fi
 
 if [ -e "conanfile.py" ]; then
