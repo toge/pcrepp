@@ -123,3 +123,34 @@ TEST_CASE("NTTP compile and _re literal", "[nttp_find]") {
     }
   }
 }
+
+TEST_CASE("nttp_regex replace with string replacement", "[nttp][f14]") {
+  auto const re = pcrepp::compile<R"(\d+)">();
+  auto const res = re.replace("abc 42 def", "X");
+  REQUIRE(res);
+  CHECK(*res == "abc X def");
+}
+
+TEST_CASE("nttp_regex replace with callback", "[nttp][f14]") {
+  auto const re = pcrepp::compile<R"((\w+))">();
+  auto const res = re.replace("hello world", [](auto const& m) -> std::string {
+    return "[" + std::string{m.get(1)} + "]";
+  });
+  REQUIRE(res);
+  CHECK(*res == "[hello] [world]");
+}
+
+TEST_CASE("nttp_regex split", "[nttp][f14]") {
+  auto const re = pcrepp::compile<R"(,\s*)">();
+  auto const parts = re.split("a, b, c");
+  REQUIRE(parts.size() == 3uz);
+  CHECK(parts[0] == "a");
+  CHECK(parts[1] == "b");
+  CHECK(parts[2] == "c");
+}
+
+TEST_CASE("nttp_match_result formatter", "[nttp][f8]") {
+  auto const res = pcrepp::find_unchecked<R"((\w+):(\d+))">("age:30");
+  auto const s = std::format("{}", res);
+  CHECK(s == "[matched, age:30, age, 30]");
+}

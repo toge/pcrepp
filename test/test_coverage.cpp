@@ -325,3 +325,54 @@ TEST_CASE("context::match without match_result arg partial mismatch", "[match][f
   REQUIRE(res.has_value());
   CHECK_FALSE(*res);
 }
+
+// ========================================
+// F4: try_get<string_view> / try_get<string>
+// ========================================
+TEST_CASE("try_get<string_view> distinguishes unmatch from empty match", "[match_result][f4]") {
+  // (a?) は空文字列にもマッチ → optional{""}
+  auto const ctx = pcrepp::context<true>::create(R"((a?))").value();
+  auto const res = ctx.find("b");  // 空マッチ
+  REQUIRE(res);
+  auto const v = res->try_get<std::string_view>(1uz);
+  REQUIRE(v.has_value());
+  CHECK(v->empty());
+
+  // 範囲外インデックスは nullopt
+  auto const no_v = res->try_get<std::string_view>(99uz);
+  CHECK_FALSE(no_v.has_value());
+}
+
+TEST_CASE("try_get<string> returns string value", "[match_result][f4]") {
+  auto const ctx = pcrepp::context<true>::create(R"((\d+))").value();
+  auto const res = ctx.find("abc 42");
+  REQUIRE(res);
+  auto const v = res->try_get<std::string>(1uz);
+  REQUIRE(v.has_value());
+  CHECK(*v == "42");
+}
+
+TEST_CASE("try_get<string_view> named capture", "[match_result][f4]") {
+  auto const ctx = pcrepp::context<true>::create(R"((?<num>\d+))").value();
+  auto const res = ctx.find("abc 42");
+  REQUIRE(res);
+  auto const v = res->try_get<std::string_view>("num");
+  REQUIRE(v.has_value());
+  CHECK(*v == "42");
+
+  auto const no_v = res->try_get<std::string_view>("missing");
+  CHECK_FALSE(no_v.has_value());
+}
+
+// ========================================
+// F6: match_result::to_tuple<N>
+// ========================================
+TEST_CASE("match_result to_tuple<N>", "[match_result][f6]") {
+  auto const ctx = pcrepp::context<true>::create(R"((\w+) (\w+))").value();
+  auto const res = ctx.find("hello world");
+  REQUIRE(res);
+  auto const t = res->to_tuple<3>();
+  CHECK(std::get<0>(t) == "hello world");
+  CHECK(std::get<1>(t) == "hello");
+  CHECK(std::get<2>(t) == "world");
+}

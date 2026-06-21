@@ -7,6 +7,7 @@
 #include <expected>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <tuple>
 #include <string>
@@ -15,6 +16,14 @@
 #include <utility>
 #include <type_traits>
 #include <vector>
+
+// C++23 std::generator サポート確認
+#if __has_include(<generator>) && __cpp_lib_generator >= 202207L
+#include <generator>
+#define PCREPP_HAS_GENERATOR 1
+#else
+#define PCREPP_HAS_GENERATOR 0
+#endif
 
 // frozencharsのヘッダが存在する場合は型変換のためにインクルードする
 #if __has_include(<frozenchars.hpp>)
@@ -669,6 +678,33 @@ struct match_result {
   }
 
   /**
+   * @brief std::string_view 版 try_get — アンマッチは nullopt、空マッチは optional{""}
+   *
+   * `PCRE2_UNSET` を直接確認することで空マッチとアンマッチを区別する。
+   */
+  template <typename T>
+    requires std::same_as<T, std::string_view>
+  auto try_get(size_t const index) const noexcept -> std::optional<std::string_view> {
+    if (not holder || not holder->data) return std::nullopt;
+    if (index >= pcre2_get_ovector_count(holder->data)) return std::nullopt;
+    auto const s = holder->ovector[index * 2uz];
+    if (s == PCRE2_UNSET) return std::nullopt;
+    auto const e = holder->ovector[index * 2uz + 1uz];
+    return holder->target.substr(s, e - s);
+  }
+
+  /**
+   * @brief std::string 版 try_get — アンマッチは nullopt、空マッチは optional{""}
+   */
+  template <typename T>
+    requires std::same_as<T, std::string>
+  auto try_get(size_t const index) const -> std::optional<std::string> {
+    auto sv = try_get<std::string_view>(index);
+    if (not sv) return std::nullopt;
+    return std::string{*sv};
+  }
+
+  /**
    * @brief 名前付きグループの数値型を std::optional として取得
    */
   template <supported_integer_get_type T>
@@ -694,6 +730,37 @@ struct match_result {
     }
     return try_get<T>(static_cast<size_t>(index));
   }
+
+  /**
+   * @brief std::string_view 版 try_get (名前指定) — アンマッチは nullopt
+   */
+  template <typename T>
+    requires std::same_as<T, std::string_view>
+  auto try_get(std::string_view const name) const noexcept -> std::optional<std::string_view> {
+    if (not holder || not holder->code || not holder->data) return std::nullopt;
+    auto const idx = detail::lookup_named_capture(holder->code, name);
+    if (idx < 0) return std::nullopt;
+    return try_get<std::string_view>(static_cast<size_t>(idx));
+  }
+
+  /**
+   * @brief std::string 版 try_get (名前指定) — アンマッチは nullopt
+   */
+  template <typename T>
+    requires std::same_as<T, std::string>
+  auto try_get(std::string_view const name) const -> std::optional<std::string> {
+    auto sv = try_get<std::string_view>(name);
+    if (not sv) return std::nullopt;
+    return std::string{*sv};
+  }
+
+  /**
+   * @brief match_result を N 要素タプルに変換（構造化束縛用）
+   * @tparam N グループ数（全体マッチ + キャプチャ数）
+   * @note 実装は detail::match_result_to_tuple を使用するため、.hpp 末尾に out-of-line 定義
+   */
+  template <size_t N>
+  auto to_tuple() const -> detail::string_view_tuple_t<N>;
 
   auto     operator[](size_t const index) const noexcept -> std::string_view { return get(index); }
   /// @brief 負値を渡すと std::out_of_range を投げる
@@ -816,6 +883,12 @@ auto match_result_to_tuple(match_result const& mr) -> nttp_match_tuple_t<N> {
   return match_result_to_tuple_impl<N>(mr, std::make_index_sequence<N>{});
 }
 }  // namespace detail
+
+/// @brief match_result::to_tuple<N>() の out-of-line 定義（detail::match_result_to_tuple を使用）
+template <size_t N>
+inline auto match_result::to_tuple() const -> detail::string_view_tuple_t<N> {
+  return detail::match_result_to_tuple<N>(*this);
+}
 
 /**
  * @struct iterator
@@ -1235,6 +1308,25 @@ public:
     auto mr = match_result{*this};
     return match(target, mr, option);
   }
+
+#if PCREPP_HAS_GENERATOR
+  /**
+   * @brief split() の lazy view 版（C++23 std::generator を使用）
+   *
+   * vector を確保せず、大量分割時に省メモリ。
+   * @param target 分割対象の文字列
+   * @param option 検索オプション
+   */
+  auto split_view(std::string_view const target, unsigned int const option = 0) const
+    -> std::generator<std::string_view> {
+    auto last = 0uz;
+    for (auto& mr : find_all(target, option)) {
+      co_yield target.substr(last, mr.start_pos() - last);
+      last = mr.end_pos();
+    }
+    co_yield target.substr(last);
+  }
+#endif
 };
 
 /**
@@ -1455,6 +1547,39 @@ struct nttp_regex {
     auto mr = match_result{*ctx_ptr};
     return ctx_ptr->match(target, mr, option);
   }
+
+  /**
+   * @brief 文字列置換（F14: context に委譲）
+   */
+  auto replace(std::string_view const target, std::string_view const replacement,
+               unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL) const
+    -> std::expected<std::string, std::string> {
+    context<UseJIT> const* ctx_ptr = nullptr;
+    try { ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>(); }
+    catch (std::runtime_error const& e) { return std::unexpected{std::string{e.what()}}; }
+    return ctx_ptr->replace(target, replacement, option);
+  }
+
+  /**
+   * @brief コールバック置換（F14: context に委譲）
+   */
+  template <typename F>
+    requires std::invocable<F, match_result const&>
+  auto replace(std::string_view const target, F&& callback) const
+    -> std::expected<std::string, std::string> {
+    context<UseJIT> const* ctx_ptr = nullptr;
+    try { ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>(); }
+    catch (std::runtime_error const& e) { return std::unexpected{std::string{e.what()}}; }
+    return ctx_ptr->replace(target, std::forward<F>(callback));
+  }
+
+  /**
+   * @brief 文字列分割（F14: context に委譲）
+   */
+  auto split(std::string_view const target, unsigned int const option = 0) const
+    -> std::vector<std::string_view> {
+    return detail::get_nttp_context<Pattern, UseJIT>().split(target, option);
+  }
 };
 
 /**
@@ -1597,6 +1722,25 @@ struct std::formatter<pcrepp::match_result> : std::formatter<std::string_view> {
         std::format_to(ctx.out(), ", ");
       }
       std::format_to(ctx.out(), "{}", res.get(i));
+    }
+    return std::format_to(ctx.out(), "]");
+  }
+};
+
+/**
+ * @brief nttp_match_result の std::format 対応（F8）
+ *
+ * 出力形式: "[matched, group0, group1, ...]" または "No Match"
+ */
+template <pcrepp::fixed_string Pattern, bool UseJIT>
+struct std::formatter<pcrepp::nttp_match_result<Pattern, UseJIT>> : std::formatter<std::string_view> {
+  auto format(pcrepp::nttp_match_result<Pattern, UseJIT> const& res, std::format_context& ctx) const {
+    if (not res) {
+      return std::format_to(ctx.out(), "No Match");
+    }
+    std::format_to(ctx.out(), "[matched");
+    for (auto const& g : res.groups) {
+      std::format_to(ctx.out(), ", {}", g);
     }
     return std::format_to(ctx.out(), "]");
   }
