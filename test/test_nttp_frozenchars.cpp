@@ -1,3 +1,10 @@
+// frozenchars 非導入環境 (CI 等) ではコンパイルのみで 0 テスト
+#if !PCREPP_TEST_HAS_FROZENCHARS
+
+// 空ファイル — Catch2WithMain はリンク済みなのでシンボル衝突なし
+
+#else  // PCREPP_TEST_HAS_FROZENCHARS
+
 #include <vector>
 
 #include "catch2/catch_all.hpp"
@@ -29,3 +36,5 @@ TEST_CASE("nttp find_all works with transformed FrozenString pattern", "[nttp][f
   CHECK(hits[1] == "22");
   CHECK(hits[2] == "333");
 }
+
+#endif  // PCREPP_TEST_HAS_FROZENCHARS
