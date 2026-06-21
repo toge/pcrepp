@@ -4,7 +4,7 @@
 
 ## エントリポイント
 
-- ライブラリ本体: `include/pcrepp.hpp` (約 1580 行、Doxygen 日本語コメント)
+- ライブラリ本体: `include/pcrepp.hpp` (約 1897 行、Doxygen 日本語コメント)
 - 公開 CMake ターゲット: `pcrepp::pcrepp` (INTERFACE ライブラリ)
 - 依存: `PCRE2::8BIT`, `FastFloat::fast_float` (必須)、`frozenchars::frozenchars` (任意、NTTP 連携のため)
 - ランタイム PCRE2 シンボル定義: `PCRE2_CODE_UNIT_WIDTH 8`

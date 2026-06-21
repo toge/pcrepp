@@ -4,14 +4,14 @@
 
 ## 特徴
 
-- **モダンな C++ 設計**: C++20 以上の機能を活用（`std::expected`, `std::ranges`, `std::format` など）。
+- **モダンな C++ 設計**: C++23 以上の機能を活用（`std::expected`, `std::ranges`, `std::format`, `std::generator` など）。
 - **ヘッダーオンリー**: `pcrepp.hpp` をインクルードするだけで利用可能。
 - **直感的な API**: 名前付きキャプチャグループへのアクセス、イテレータによる全マッチの列挙、ラムダ式を用いた動的置換などをサポート。
 - **高性能**: 必要に応じて PCRE2 の JIT コンパイルをサポート。
 
 ## 動作要件
 
-- **C++ コンパイラ**: C++20 以降をサポートするコンパイラ（GCC 11+, Clang 13+, MSVC 19.30+ 推奨）。
+- **C++ コンパイラ**: C++23 以降をサポートするコンパイラ（GCC 14+, Clang 18+, MSVC 19.36+ 推奨）。
 - **依存ライブラリ**: PCRE2 (8-bit 版)。
 
 ## インストール方法
@@ -39,49 +39,53 @@ target_link_libraries(your_target PRIVATE pcrepp::pcrepp)
 
 ## API リファレンス
 
-### `pcrepp::context<UseJIT>`
+### `pcrepp::context<UseJIT, JITFlags>`
 正規表現のコンパイルと検索・置換操作を管理するメインクラスです。
 
 - **`static create(src, option)`**: `std::expected` を返すファクトリメソッド。
 - **`compile(src, option)`**: パターンをコンパイルします。
 - **`find(target, match_result, start, option)`**: 単一のマッチを検索し、既存の `match_result` に書き込みます。
 - **`find(target, start, option)`**: 単一のマッチを検索し、`match_result` を戻り値で返します。
-- **`match(target, match_result, option)`**: 完全一致を判定します。
+- **`match(target, match_result, option)`** / **`match(target, option)`**: 完全一致を判定します。
 - **`replace(target, replacement, option)`**: 文字列による全置換を行います。
 - **`replace(target, callback)`**: ラムダ式を用いた動的置換を行います。
-- **`find_all(target, option)`**: すべてのマッチを巡回するための Range を返します。
-- **`split(target)`**: 正規表現を区切り文字として文字列を分割します。
+- **`find_all(target, option, start)`**: すべてのマッチを巡回するための Range を返します。
+- **`split(target, option)`**: 正規表現を区切り文字として文字列を分割します。
+- **`split_view(target, option)`**: `std::generator` による lazy 分割を返します（C++23）。
+- **`capture_count()` / `named_captures()` / `pattern_size()` / `jit_size()` / `options()`**: パターン情報を取得します。
+- **`set_match_limit()` / `set_depth_limit()` / `set_heap_limit()` / `set_offset_limit()`**: PCRE2 の match context 制限を設定します。
 
 ### `pcrepp::find<"..."> / pcrepp::find_all<"...">` (NTTP API)
 
 
-正規表現をテンプレート引数（NTTP: Non-Type Template Parameter）で直接指定するヘルパー関数です。戻り値は **tuple-like な専用オブジェクト** で、構造化束縛と `get()` の両方を使えます。
+正規表現をテンプレート引数（NTTP: Non-Type Template Parameter）で直接指定するヘルパー関数です。`find` は `std::expected` を返します。
 
 #### `find<Pattern>(target, start = 0, option = 0)`
 
 ```cpp
 auto result = pcrepp::find<R"((?<key>\w+):(?<value>\d+))">("age:30");
-if (result) {
-  // index 指定
-  auto whole = pcrepp::get<1>(result);
-  // 名前付きキャプチャ指定
-  auto key = result.get<"key">();
-  auto value = result.get<"value">();
+if (result && *result) {
+  auto whole = pcrepp::get<1>(*result);
+  auto key = result->get<"key">();
+  auto value = result->get<"value">();
 }
 
 // 構造化束縛にも対応
-if (auto [matched, whole, key, value] = pcrepp::find<R"((\w+):(\d+))">("age:30"); matched) {
-  // ...
+if (auto r = pcrepp::find<R"((\w+):(\d+))">("age:30"); r && *r) {
+  auto [matched, whole, key, value] = *r;
+  (void)matched;
+  (void)whole;
+  (void)key;
+  (void)value;
 }
 ```
 
-- **戻り値**: `nttp_match_result<Pattern, ...>`（bool 変換可能）
+- **戻り値**: `std::expected<nttp_match_result<Pattern, ...>, std::string>`
 - **要素順序**:
-  - `pcrepp::get<0>(result)`: `bool` — マッチ成功フラグ
-  - `pcrepp::get<1>(result)` 以降: `std::string_view` — 全体マッチと各キャプチャグループ
+  - `find<Pattern>`: `[matched, whole, g1, ...]`（N+2 要素）
+  - `find_all<Pattern>`: `[whole, g1, ...]`（N+1 要素）
 - **名前付き取得**: `result.get<"name">()`
-- **マッチしない場合**: `bool` は `false` で、それ以外は空の `std::string_view`
-- **エラー時**: `std::runtime_error` を送出
+- **エラー時**: `expected::error()` で取得（`find_unchecked` は throw 版）
 #### `find_all<Pattern>(target, option = 0)`
 
 すべてのマッチを取得します。
@@ -97,6 +101,17 @@ for (auto const& result : all) {
 
 - **戻り値**: `std::vector<nttp_match_result<Pattern, ...>>`
 - **エラー時**: `std::runtime_error` を送出
+
+#### `compile<Pattern>() / "..."_re`
+
+`nttp_regex<Pattern>` オブジェクトを生成し、以下を利用できます。
+
+- **`re.find(target, start, option)`**
+- **`re.find_all(target, option)`**
+- **`re.match(target, option)`** (`std::expected<bool, std::string>`)
+- **`re.replace(target, replacement, option)`** / **`re.replace(target, callback)`**
+- **`re.split(target, option)`**
+- **`pcrepp::substitute_flags::*`**（`global`, `extended`, `literal` など）
 #### 利点
 
 - **構造化束縛しやすい**: `auto [matched, ...] = find<...>(...)` のように直接展開可能
@@ -107,7 +122,8 @@ for (auto const& result : all) {
 個別のマッチング結果を保持するクラスです。
 
 - **`get<T = std::string_view>(index / name)`**: 指定したインデックスまたは名前のグループを取得します。`T` には `std::string_view`、`std::string`、`float`、`double`、各種整数型を指定でき、未対応型はコンパイルエラーになります。数値変換に失敗した場合はその型のデフォルト値を返します。`name` は NUL 終端されている必要はなく、内部で NUL 終端バッファにコピーされます。
-- **`try_get<T>(index / name)`**: 数値型のみ。変換に成功した場合は `std::optional<T>` が値を持ち、失敗・範囲外・名前未マッチは `std::nullopt` を返します。`get<T>()` と異なり、`0` (デフォルト値) と失敗を区別できます。
+- **`try_get<T>(index / name)`**: `std::string_view` / `std::string` / 数値型に対応。変換失敗・範囲外・名前未マッチは `std::nullopt`。
+- **`to_tuple<N>()`**: キャプチャを tuple 化します。
 - **`operator[]`**: `get` のエイリアス。
 - **`size()`**: キャプチャグループの数を返します。
 - **`start_pos() / end_pos()`**: マッチした箇所の開始/終了位置を返します。
@@ -163,8 +179,12 @@ auto main() -> int {
     auto value = res.get<int>("value");
     return std::format("{}({} USD)", res["name"], value / 100);
   });
+  if (not dynamic_res) {
+    std::cerr << dynamic_res.error() << "\n";
+    return 1;
+  }
   std::cout << "Original: " << target << "\n";
-  std::cout << "Replaced: " << dynamic_res << "\n";
+  std::cout << "Replaced: " << *dynamic_res << "\n";
 
   return 0;
 }
@@ -193,8 +213,11 @@ auto main() -> int {
   }
 
   // NTTP 版の find で最初のマッチを取得
-  if (auto const [matched, whole, key, value] = pcrepp::find<R"((\w+):(\d+))">(target); matched) {
-    std::cout << "\nFirst match: " << key << " = " << value << "\n";
+  if (auto const first = pcrepp::find<R"((\w+):(\d+))">(target); first && *first) {
+    auto const& [matched, whole, key, value] = *first;
+    if (matched) {
+      std::cout << "\nFirst match: " << key << " = " << value << "\n";
+    }
   }
 
   return 0;

@@ -47,6 +47,32 @@ cmake --build build --parallel
 > 環境: 下記は参考値です。実際の値は CPU・メモリ・PCRE2 バージョン・コンパイラに依存します。
 > 固定シード (42) で再現可能です。
 
+### 2026-06-21 M7 測定ログ（build2）
+
+- ベースライン: `benchmark_baseline.json` / `benchmark_baseline.txt`
+- 改善後: `benchmark_after.json` / `benchmark_after.txt`
+- 実施内容: `context::replace` の初期バッファ戦略を `target + 20% + replacement + 256` に調整し、コールバック置換でも同様の reserve 方針を適用。
+
+#### ベースライン上位（mean, CPU time）
+
+| Benchmark | Mean |
+|---|---:|
+| BM_Replace_NoJIT/102400_mean | 158,829 ns |
+| BM_FindAll_NoJIT/102400_mean | 139,398 ns |
+| BM_Replace_JIT/102400_mean | 99,990 ns |
+| BM_FindAll_JIT/102400_mean | 76,127 ns |
+
+#### 置換系の比較（mean, CPU time）
+
+| Benchmark | Baseline | After | Diff |
+|---|---:|---:|---:|
+| BM_Replace_JIT/102400_mean | 99,990 ns | 98,983 ns | -1.01% |
+| BM_Replace_JIT/1024_mean | 1,042 ns | 1,034 ns | -0.74% |
+| BM_Replace_NoJIT/102400_mean | 158,829 ns | 160,309 ns | +0.93% |
+| BM_Replace_NoJIT/1024_mean | 1,674 ns | 1,644 ns | -1.82% |
+
+> 観測上の差分は ±1〜2% 程度で、ノイズレンジに近い。現時点では大きなボトルネック改善は確認できないため、次の候補は `find_all` 経路（特に no-JIT 大入力）を優先的に解析する。
+
 ### Compile
 
 | Pattern   | Size   | pcrepp (JIT) | pcrepp (no JIT) | raw PCRE2 (JIT) | raw PCRE2 (no JIT) |

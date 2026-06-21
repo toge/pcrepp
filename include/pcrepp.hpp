@@ -1311,7 +1311,7 @@ public:
     if (not code) {
       return std::unexpected{"Not compiled."};
     }
-    auto outlen = target.size() + replacement.size() + 1024uz;
+    auto outlen = target.size() + (target.size() / 5uz) + replacement.size() + 256uz;
     auto buffer = std::string(outlen, '\0');
     auto blen   = outlen;
     auto const rc = pcre2_substitute(
@@ -1364,7 +1364,7 @@ public:
       return std::unexpected{"Not compiled."};
     }
     auto result = std::string{};
-    result.reserve(target.size());
+    result.reserve(target.size() + (target.size() / 5uz) + 256uz);
 
     auto last_pos = 0uz;
     for (auto& mr : find_all(target)) {
@@ -1659,6 +1659,10 @@ struct nttp_regex {
 
   /**
    * @brief 最初のマッチを検索
+   * @param target 検索対象の文字列
+   * @param start 検索開始バイト位置
+   * @param option マッチオプション
+   * @return std::expected<nttp_match_result<Pattern, UseJIT>, std::string>
    */
   auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) const {
     return pcrepp::find<Pattern, UseJIT>(target, start, option);
@@ -1666,6 +1670,10 @@ struct nttp_regex {
 
   /**
    * @brief 全てのマッチを検索
+   * @param target 検索対象の文字列
+   * @param option マッチオプション
+   * @return std::vector<detail::nttp_match_tuple_t<nttp_group_count_v<Pattern>>>
+   * @note find_all は戻り値が [whole, g1, ...]（N+1 要素）
    */
   auto find_all(std::string_view const target, unsigned int const option = 0) const {
     return pcrepp::find_all<Pattern, UseJIT>(target, option);
@@ -1673,6 +1681,8 @@ struct nttp_regex {
 
   /**
    * @brief 完全一致を確認 (C7: expected 版)
+   * @param target 判定対象の文字列
+   * @param option マッチオプション
    * @return std::expected<bool, std::string> 完全一致するか、エラーメッセージ
    */
   auto match(std::string_view const target, unsigned int const option = 0) const -> std::expected<bool, std::string> {
@@ -1688,6 +1698,10 @@ struct nttp_regex {
 
   /**
    * @brief 文字列置換（F14: context に委譲）
+   * @param target 置換対象の文字列
+   * @param replacement 置換後の文字列
+   * @param option 置換オプション
+   * @return std::expected<std::string, std::string> 置換結果またはエラーメッセージ
    */
   auto replace(std::string_view const target, std::string_view const replacement,
                unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL) const
@@ -1700,6 +1714,9 @@ struct nttp_regex {
 
   /**
    * @brief コールバック置換（F14: context に委譲）
+   * @param target 置換対象の文字列
+   * @param callback マッチ結果を受け取り置換後文字列を返す関数
+   * @return std::expected<std::string, std::string> 置換結果またはエラーメッセージ
    */
   template <typename F>
     requires std::invocable<F, match_result const&>
@@ -1713,6 +1730,9 @@ struct nttp_regex {
 
   /**
    * @brief 文字列分割（F14: context に委譲）
+   * @param target 分割対象の文字列
+   * @param option マッチオプション
+   * @return std::vector<std::string_view> 分割結果
    */
   auto split(std::string_view const target, unsigned int const option = 0) const
     -> std::vector<std::string_view> {
