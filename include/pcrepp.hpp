@@ -857,7 +857,7 @@ private:
     auto const e = holder->ovector[index * 2uz + 1uz];
     if (s == PCRE2_UNSET || e == PCRE2_UNSET) return std::nullopt;
     if (s > e) return std::nullopt;
-    if (e > holder->target.size()) return std::nullopt;
+    if (s > holder->target.size()) return std::nullopt;
     return holder->target.substr(s, e - s);
   }
 
