@@ -594,7 +594,7 @@ struct match_result {
     pcre2_code const* code    = nullptr;
     pcre2_match_data* data    = nullptr;
     size_t*           ovector = nullptr;
-    std::string       target  = {};
+    std::string_view  target  = {};
 
     data_holder(pcre2_code const* c) : code(c) {
       if (code) {
@@ -846,7 +846,7 @@ private:
     if (code && src_data) {
       holder = std::make_shared<data_holder>(code);
       copy_ovector(holder->ovector, holder->data, pcre2_get_ovector_pointer(src_data), src_data);
-      holder->target.assign(target.data(), target.size());
+      holder->target = target;
     }
   }
 
@@ -858,7 +858,7 @@ private:
     if (s == PCRE2_UNSET || e == PCRE2_UNSET) return std::nullopt;
     if (s > e) return std::nullopt;
     if (s > holder->target.size()) return std::nullopt;
-    return std::string_view{holder->target}.substr(s, e - s);
+    return holder->target.substr(s, e - s);
   }
 
   auto get_view(size_t const index) const noexcept -> std::string_view {
@@ -873,7 +873,7 @@ private:
     if (s > holder->target.size()) {
       return {};
     }
-    return std::string_view{holder->target}.substr(s, e - s);
+    return holder->target.substr(s, e - s);
   }
 
   match_result(pcre2_code const* code) {
@@ -886,7 +886,7 @@ private:
   auto get_data() const noexcept -> pcre2_match_data* { return holder ? holder->data : nullptr; }
   auto set_target(std::string_view const t) noexcept {
     if (holder) {
-      holder->target.assign(t.data(), t.size());
+      holder->target = t;
     }
   }
 
