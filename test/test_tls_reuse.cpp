@@ -108,7 +108,7 @@ TEST_CASE("TLS multithreaded concurrent find", "[tls][multithreaded]") {
     auto const ctx2 = context<>::create(R"((\d+))").value();
     auto const n = 24;
     auto errors = std::atomic<int>{0};
-    auto threads = std::vector<std::jthread>{};
+    auto threads = std::vector<std::thread>{};
     threads.reserve(static_cast<size_t>(n));
     for (auto const i : std::views::iota(0, n)) {
         threads.emplace_back([&, i] {
@@ -122,6 +122,9 @@ TEST_CASE("TLS multithreaded concurrent find", "[tls][multithreaded]") {
                 }
             }
         });
+    }
+    for (auto& t : threads) {
+        if (t.joinable()) t.join();
     }
     threads.clear(); // join
     CHECK(errors.load() == 0);
