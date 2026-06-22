@@ -55,3 +55,4 @@ images*
 vcpkg_installed
 docs/plans
 docs/superpowers
+.worktrees/
