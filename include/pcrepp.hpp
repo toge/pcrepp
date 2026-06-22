@@ -715,12 +715,7 @@ struct match_result {
   template <typename T>
     requires std::same_as<T, std::string_view>
   auto try_get(size_t const index) const noexcept -> std::optional<std::string_view> {
-    if (not holder || not holder->data) return std::nullopt;
-    if (index >= pcre2_get_ovector_count(holder->data)) return std::nullopt;
-    auto const s = holder->ovector[index * 2uz];
-    if (s == PCRE2_UNSET) return std::nullopt;
-    auto const e = holder->ovector[index * 2uz + 1uz];
-    return holder->target.substr(s, e - s);
+    return try_get_view(index);
   }
 
   /**
@@ -855,16 +850,19 @@ private:
     }
   }
 
-  auto get_view(size_t const index) const noexcept -> std::string_view {
-    if (not holder || not holder->data || index >= pcre2_get_ovector_count(holder->data)) {
-      return {};
-    }
-    auto const s = holder->ovector[index * 2uz + 0uz];
+  auto try_get_view(size_t const index) const noexcept -> std::optional<std::string_view> {
+    if (not holder || not holder->data) return std::nullopt;
+    if (index >= pcre2_get_ovector_count(holder->data)) return std::nullopt;
+    auto const s = holder->ovector[index * 2uz];
     auto const e = holder->ovector[index * 2uz + 1uz];
-    if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
-      return {};
-    }
+    if (s == PCRE2_UNSET || e == PCRE2_UNSET) return std::nullopt;
+    if (s > e) return std::nullopt;
+    if (e > holder->target.size()) return std::nullopt;
     return holder->target.substr(s, e - s);
+  }
+
+  auto get_view(size_t const index) const noexcept -> std::string_view {
+    return try_get_view(index).value_or(std::string_view{});
   }
 
   match_result(pcre2_code const* code) {
