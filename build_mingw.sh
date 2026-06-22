@@ -8,23 +8,23 @@ else
     export CFLAG="-O3 -march=native"
 fi
 
-export CONAN_LOG_RUN_TO_OUTPUT=1
-export CONAN_LOGGING_LEVEL=10
-export CONAN_PRINT_RUN_COMMANDS=1
-
-export CMAKE_C_COMPILE=x86_64-w64-mingw32-gcc
-export CMAKE_CXX_COMPILE=x86_64-w64-mingw32-g++
+export VCPKG_ROOT=$(readlink -f ~/vm/vcpkg)
+export VCPKG_OVERLAY_PORTS="${VCPKG_ROOT}/ports"
+export VCPKG_TARGET_TRIPLET=x64-mingw-static
 
 export CC=x86_64-w64-mingw32-gcc
 export CXX=x86_64-w64-mingw32-g++
 
-conan install -of build_mingw64 . --build=missing --profile=mingw64
-RET=$?
-if [ $RET -ne 0 ]; then
-    exit $RET;
-fi
-
-cmake -B build_mingw64 -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_FLAGS=${CXXFLAG}" "-DCMAKE_C_FLAGS=${CFLAG}" -S .
+cmake -B build_mingw64 \
+    -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+    -DVCPKG_TARGET_TRIPLET=x64-mingw-static \
+    -DCMAKE_SYSTEM_NAME=Windows \
+    -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+    -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+    -DCMAKE_BUILD_TYPE=Release \
+    "-DCMAKE_CXX_FLAGS=${CXXFLAG}" \
+    "-DCMAKE_C_FLAGS=${CFLAG}" \
+    -S .
 RET=$?
 if [ $RET -ne 0 ]; then
     exit $RET;
