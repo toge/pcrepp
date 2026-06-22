@@ -4,66 +4,184 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
-  build-test:
-    name: ${{ matrix.os }} / ${{ matrix.compiler }}
-    runs-on: ${{ matrix.os }}
+  linux-gcc:
+    runs-on: ubuntu-latest
+
+    # 複数のFedoraバージョンをマトリクスとして定義
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            compiler: gcc
-            cc: gcc-14
-            cxx: g++-14
-          - os: ubuntu-24.04
-            compiler: clang
-            cc: clang-18
-            cxx: clang++-18
+        # gcc 16 : Fedora 44
+        # gcc 15 : Fedora 43
+        # gcc 14 : Fedora 41
+        fedora_version: ["44", "43", "41"]
+
+    # 定義したバージョンを動的にコンテナへ割り当て
+    container: fedora:${{ matrix.fedora_version }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install GCC 14
-        if: matrix.compiler == 'gcc'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14
+      - name: Install build tools
+        run: dnf install -y gcc-c++ cmake ninja-build git curl zip unzip tar
 
-      - name: Install Clang 18
-        if: matrix.compiler == 'clang'
+      - name: Check GCC version
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-18
+          g++ --version
+          g++ -dumpversion | grep -E "^(1[4-9]|[2-9][0-9])(\.|\$)" || { echo "ERROR: GCC 14+ required, found $(g++ -dumpversion)"; exit 1; }
 
-      - name: Override vcpkg configuration for CI (public registry only)
-        run: |
-          cp ci/vcpkg-configuration.json vcpkg-configuration.json
-          cp ci/vcpkg.json vcpkg.json
-
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
+      # キャッシュキーにもFedoraのバージョンを混ぜてコンフリクトを防ぐ
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
         with:
-          vcpkgGitCommitId: '49fc12ae5454cce380ca1272fe8973f2467d6118'
+          path: |
+            ~/vcpkg
+            build/vcpkg_installed
+          key: ${{ runner.os }}-fedora-${{ matrix.fedora_version }}-vcpkg-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-fedora-${{ matrix.fedora_version }}-vcpkg-
+
+      - name: Install vcpkg
+        run: |
+          if [ ! -d ~/vcpkg ]; then
+            git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
+            ~/vcpkg/bootstrap-vcpkg.sh
+          fi
 
       - name: Configure
-        env:
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
         run: |
-          cmake -B build \
-            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
-            -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -S . -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build -V
 
-      - name: Binary sanity
-        run: ./build/test/all_test --list-tests >/dev/null
+  windows-msvc:
+    runs-on: windows-latest
 
-      - name: Install test (A1/A2 검증)
-        run: cmake --install build --prefix /tmp/pcrepp-install-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg
+            build\vcpkg_installed
+          key: ${{ runner.os }}-msvc-vcpkg-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-msvc-vcpkg-
+
+      - name: Setup vcpkg
+        run: |
+          if not exist C:\vcpkg (
+            git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+            call C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          )
+        shell: cmd
+
+      - name: Configure
+        run: cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        run: ctest --test-dir build -V -C Release
+
+  linux-clang:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # clang 22 : Fedora 44
+        # clang 21 : Fedora 43
+        # clang 20 : Fedora 42
+        # clang 19 : Fedora 41
+        fedora_version: ["44", "43", "42", "41"]
+
+    container: fedora:${{ matrix.fedora_version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: dnf install -y clang cmake ninja-build git curl zip unzip tar
+
+      - name: Check Clang version
+        run: clang++ --version
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/vcpkg
+            build/vcpkg_installed
+          key: ${{ runner.os }}-clang-${{ matrix.fedora_version }}-vcpkg-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-clang-${{ matrix.fedora_version }}-vcpkg-
+
+      - name: Install vcpkg
+        run: |
+          if [ ! -d ~/vcpkg ]; then
+            git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
+            ~/vcpkg/bootstrap-vcpkg.sh
+          fi
+
+      - name: Configure
+        run: |
+          cmake -B build -S . -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build -V
+
+  macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install cmake ninja
+
+      - name: Check compiler version
+        run: clang++ --version
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/vcpkg
+            build/vcpkg_installed
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Install vcpkg
+        run: |
+          if [ ! -d ~/vcpkg ]; then
+            git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
+            ~/vcpkg/bootstrap-vcpkg.sh
+          fi
+
+      - name: Configure
+        run: cmake -B build -S . -G Ninja -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build -V
