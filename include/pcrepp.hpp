@@ -862,7 +862,18 @@ private:
   }
 
   auto get_view(size_t const index) const noexcept -> std::string_view {
-    return try_get_view(index).value_or(std::string_view{});
+    if (not holder || not holder->data) {
+      return {};
+    }
+    auto const s = holder->ovector[index * 2uz + 0uz];
+    auto const e = holder->ovector[index * 2uz + 1uz];
+    if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
+      return {};
+    }
+    if (s > holder->target.size()) {
+      return {};
+    }
+    return holder->target.substr(s, e - s);
   }
 
   match_result(pcre2_code const* code) {
