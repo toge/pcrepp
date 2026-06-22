@@ -10,7 +10,7 @@
       "baseline": "64cf5bd256b28ce10fd4212f249109206e059e56",
       "repository": "https://github.com/toge/my-vcpkg-ports",
       "packages": [
-        "*"
+        "frozenchars"
       ]
     }
   ]
