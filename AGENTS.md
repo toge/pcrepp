@@ -60,6 +60,7 @@ cd build && ctest -V            # = ./test.sh
 
 - `.clang-format`: LLVM ベース、**インデント 2 スペース・最大幅 200・左寄せポインタ (`int* p`)**、連続宣言/代入を揃える、`BreakBeforeBraces: Attach`。
 - `.clang-tidy`: `cppcoreguidelines-*` / `bugprone-*` / `modernize-*` / `performance-*` を有効。識別子は **lower_case (変数・メンバ・関数 camelBack・定数 upper_case)** を強制 (`readability-identifier-naming`)。
+  - clang-tidy 22 以降は値名を `UPPER_CASE` と表記する必要がある (旧 `upper_case` は無効値で警告のみ出力され、実質的に規約が効かない)。
 - 言語機能: C++20 concept、`std::expected`、`std::ranges`、`std::format` を常用。
 - コメント: **Doxygen 形式で日本語**。内部状態や分岐意図を 1〜数行で記述する流儀。新規 API 追加時はこのスタイルに揃える。
 - ヘッダオンリーの都合で `inline` テンプレートメンバ関数のみ `.hpp` 末尾に定義が置かれている (例: `match_result::match_result(context const&)`)。
@@ -73,6 +74,7 @@ cd build && ctest -V            # = ./test.sh
 - **NUL 終端**: `pcre2_substring_number_from_name` は NUL 終端を要求するため、名前付きキャプチャは内部で NUL 終端バッファにコピーする (`detail::lookup_named_capture`)。`std::string_view` を直接渡しても安全。
 - **`std::format`**: `match_result` 用フォーマッタは `<format>` があるときのみ提供。GCC 14+ / Clang 18+ 想定。
 - **CMake ターゲット名**: コンシューマは `pcrepp::pcrepp` を `PRIVATE` / `PUBLIC` リンクし、`#include "pcrepp.hpp"` するだけ。
+- **`count_capture_groups` リファクタリングは保留中**: 状態変数を `parse_state` 構造体にまとめて可読性を上げる試みは、constexpr 関数内でローカル定義した `parse_state` のメンバが `std::array<br_state, 64>` へのインデックスアクセス時に「`array subscript value '0' is outside the bounds`」を発して、`test/test_capture_count.cpp` の branch reset 系 `static_assert` 6 件がコンパイルエラーになった (性能劣化ではなく機能破損のため修正を破棄)。可読性改善が必要であれば `parse_state` を `detail::` 名前空間の関数外で定義し、`std::array` のサイズを constexpr 評価可能な定数として外出しにしてから着手すること。
 
 ## 検証チェックリスト
 

@@ -265,7 +265,7 @@ BENCHMARK(BM_NttpFind)->Arg(1024)->Arg(102400);
 //  BM_Japanese — 日本語テキストでの find_all
 // ===================================================================
 static void BM_Japanese_FindAll_JIT(benchmark::State& state) {
-  auto const ctx = pcrepp::context<true>{R"((\\d+)円)", PCRE2_UTF};
+  auto const ctx = pcrepp::context<true>{R"((\d+)円)", PCRE2_UTF};
   auto const& text = get_jp_text(state.range(0));
   for (auto _ : state) {
     auto count = 0uz;

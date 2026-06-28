@@ -1557,14 +1557,25 @@ auto make_nttp_result_raw(pcre2_match_data* md, std::string_view target) -> nttp
  * `find<Pattern>` / `find_all<Pattern>` / `nttp_match_result::get<Name>` /
  * `nttp_regex<Pattern>::match` から共通利用される。
  */
+/**
+ * @brief パターン文字列に非 ASCII 文字が含まれていれば PCRE2_UTF を返す。
+ *
+ * NTTP 版 (`get_nttp_context`) と Runtime 版 (`context_create_utf`) で
+ * 「非 ASCII パターン → 自動的に PCRE2_UTF を付与」というポリシーを
+ * 統一するためのヘルパ。`constexpr` なので NTTP の `compile_opt` 計算にも使える。
+ */
+inline constexpr auto auto_utf_options(std::string_view const pattern) noexcept -> unsigned int {
+  for (auto const c : pattern) {
+    if (static_cast<unsigned char>(c) > 0x7F) {
+      return PCRE2_UTF;
+    }
+  }
+  return 0;
+}
+
 template <fixed_string Pattern, bool UseJIT = true>
 inline auto get_nttp_context() -> context<UseJIT> const& {
-  constexpr auto compile_opt = []() -> unsigned int {
-    for (auto const c : Pattern.view())
-      if (static_cast<unsigned char>(c) > 0x7F) return PCRE2_UTF;
-    return 0;
-  }();
-  static auto const ctx_res = context<UseJIT>::create(Pattern.view(), compile_opt);
+  static auto const ctx_res = context<UseJIT>::create(Pattern.view(), auto_utf_options(Pattern.view()));
   if (not ctx_res) {
     throw std::runtime_error{"NTTP context compile error: " + ctx_res.error()};
   }
@@ -1771,6 +1782,46 @@ constexpr auto compile() {
 template <fixed_string Pattern>
 constexpr auto operator""_re() {
   return compile<Pattern>();
+}
+
+/**
+ * @brief NTTP 版: UTF 自動付与版 compile (E9)
+ *
+ * パターンに非 ASCII 文字が含まれていれば PCRE2_UTF を自動的に付与してコンパイルする。
+ * プロセス内で 1 度だけコンパイルし、その後は同じ context を共有する。
+ * 「ASCII 中心だが日本語も混じる」という一般的なケースで、PCRE2_UTF の指定忘れを防ぐ。
+ *
+ * ```cpp
+ * auto const& ctx = pcrepp::compile_utf<R"((?<city>[\w\W]+)の(?<item>[\w\W]+))">();
+ * pcrepp::match_result mr{ctx};
+ * if (ctx.find("東京のラーメン", mr)) {
+ *   auto const city = mr["city"]; // PCRE2_UTF 適用済みなので \w が日本語にマッチ
+ * }
+ * ```
+ *
+ * @note context はコピー禁止のため参照を返す。
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+inline auto compile_utf() -> context<UseJIT> const& {
+  return detail::get_nttp_context<Pattern, UseJIT>();
+}
+
+/**
+ * @brief Runtime 版: UTF 自動付与版 context::create (E9)
+ *
+ * `pattern` に非 ASCII 文字が含まれていれば PCRE2_UTF を自動的に付与する。
+ * NTTP 版と Runtime 版で「非 ASCII パターン → 自動的に PCRE2_UTF」という
+ * ポリシーを統一するためのヘルパ。
+ */
+inline auto context_create_utf(std::string_view const src, unsigned int const extra_option = 0)
+  -> std::expected<context<true>, std::string> {
+  return context<true>::create(src, detail::auto_utf_options(src) | extra_option);
+}
+
+template <bool UseJIT, unsigned JITFlags>
+inline auto context_create_utf(std::string_view const src, unsigned int const extra_option = 0)
+  -> std::expected<context<UseJIT, JITFlags>, std::string> {
+  return context<UseJIT, JITFlags>::create(src, detail::auto_utf_options(src) | extra_option);
 }
 
 // frozenchars ライブラリが利用可能な場合、テンプレート引数に指定可能にする

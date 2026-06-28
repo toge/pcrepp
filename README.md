@@ -207,8 +207,8 @@ auto main() -> int {
   auto const all = pcrepp::find_all<R"((\w+):(\d+))">(target);
 
   std::cout << "--- NTTP find_all ---\n";
-  for (auto const& [matched, whole, key, value] : all) {
-    if (not matched) continue;
+  // find_all の構造化束縛は [whole, g1, g2, ...] (matched を含まない)
+  for (auto const& [whole, key, value] : all) {
     std::cout << "Key: " << key << ", Value: " << value << "\n";
   }
 
