@@ -3,6 +3,7 @@
   "dependencies": [
     "pcre2",
     "catch2",
-    "fast-float"
+    "fast-float",
+    "ctre"
   ]
 }

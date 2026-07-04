@@ -4,6 +4,7 @@
     "pcre2",
     "catch2",
     "fast-float",
-    "frozenchars"
+    "frozenchars",
+    "ctre"
   ]
 }

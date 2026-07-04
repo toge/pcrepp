@@ -3,6 +3,7 @@ project(pcrepp VERSION 0.1.0 LANGUAGES CXX)
 
 option(ENABLE_TESTS "Enable tests" ON)
 option(BUILD_BENCH "Build benchmarks" OFF)
+option(PCREPP_CTRE_FALLBACK "Enable automatic fallback to CTRE for PCRE2-unfriendly patterns" OFF)
 
 set(PCREPP_OPTIMIZATION_FLAG_REGEX "(^|[ \t])-O[^ \t]+")
 set(PCREPP_CPU_TUNING_FLAG_REGEX "(^|[ \t])-(march|mcpu|mtune)=[^ \t]+")
@@ -50,6 +51,10 @@ include(CMakePackageConfigHelpers)
 find_package(PCRE2 CONFIG REQUIRED)
 find_package(FastFloat CONFIG REQUIRED)
 
+if(PCREPP_CTRE_FALLBACK)
+  find_package(ctre CONFIG REQUIRED)
+endif()
+
 add_library(pcrepp INTERFACE)
 add_library(pcrepp::pcrepp ALIAS pcrepp)
 
@@ -61,6 +66,11 @@ target_include_directories(pcrepp
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
+if(PCREPP_CTRE_FALLBACK)
+  target_link_libraries(pcrepp INTERFACE ctre::ctre)
+  target_compile_definitions(pcrepp INTERFACE PCREPP_CTRE_FALLBACK=1)
+endif()
+
 install(TARGETS pcrepp
     EXPORT pcreppTargets
 )
@@ -68,6 +78,12 @@ install(FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/include/pcrepp.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+
+if(PCREPP_CTRE_FALLBACK)
+  set(PCREPP_CTRE_FALLBACK_FIND_DEP "find_dependency(ctre CONFIG)")
+else()
+  set(PCREPP_CTRE_FALLBACK_FIND_DEP "")
+endif()
 
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/pcreppConfig.cmake.in"
