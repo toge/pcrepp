@@ -410,7 +410,9 @@ TEST_CASE("context pattern info queries", "[e5]") {
 
 TEST_CASE("context jit size on JIT-enabled context", "[e1][e5]") {
   auto const ctx = pcrepp::context<true, PCRE2_JIT_COMPLETE>::create(R"(\d+)").value();
+#ifndef __EMSCRIPTEN__
   CHECK(ctx.jit_size() > 0uz);
+#endif
 }
 
 TEST_CASE("context set_match_limit can trigger match error", "[e3]") {

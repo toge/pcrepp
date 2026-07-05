@@ -1083,10 +1083,16 @@ public:
     }
     if constexpr (UseJIT) {
       if (auto const jrc = pcre2_jit_compile(c, JITFlags); jrc < 0) {
-        auto msg = std::array<PCRE2_UCHAR8, 256uz>{};
-        pcre2_get_error_message(jrc, msg.data(), msg.size());
-        pcre2_code_free(c);
-        return std::unexpected{"JIT compile error: " + std::string{reinterpret_cast<char const*>(msg.data())}};
+        auto jit_available = 0;
+        pcre2_config(PCRE2_CONFIG_JIT, &jit_available);
+        if (!jit_available) {
+          // JIT 非対応環境 (Emscripten 等) では JIT をスキップして Interpreter にフォールバック
+        } else {
+          auto msg = std::array<PCRE2_UCHAR8, 256uz>{};
+          pcre2_get_error_message(jrc, msg.data(), msg.size());
+          pcre2_code_free(c);
+          return std::unexpected{"JIT compile error: " + std::string{reinterpret_cast<char const*>(msg.data())}};
+        }
       }
     }
     this->code = c;
@@ -1214,10 +1220,14 @@ public:
     }
     auto const rc = [&] -> int {
       if constexpr (UseJIT) {
-        return pcre2_jit_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
-      } else {
-        return pcre2_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
+        PCRE2_SIZE jit_size = 0;
+        pcre2_pattern_info(code, PCRE2_INFO_JITSIZE, &jit_size);
+        if (jit_size > 0) [[likely]] {
+          return pcre2_jit_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
+        }
+        // JIT が利用可能でなかった場合は Interpreter にフォールバック
       }
+      return pcre2_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
     }();
     if (rc >= 0) {
       return rc;
