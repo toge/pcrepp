@@ -6,7 +6,7 @@
 
 - ライブラリ本体: `include/pcrepp.hpp` (約 1897 行、Doxygen 日本語コメント)
 - 公開 CMake ターゲット: `pcrepp::pcrepp` (INTERFACE ライブラリ)
-- 依存: `PCRE2::8BIT`, `FastFloat::fast_float` (必須)、`frozenchars::frozenchars` (任意、NTTP 連携のため)、`ctre` (任意、`PCREPP_CTRE_FALLBACK=ON` 時に必要)
+- 依存: `PCRE2::8BIT`, `FastFloat::fast_float` (必須)、`frozenchars::frozenchars` (任意、NTTP 連携のため)、`ctre` (任意、`WITH_CTRE=ON` 時に必要)
 - ランタイム PCRE2 シンボル定義: `PCRE2_CODE_UNIT_WIDTH 8`
 
 ## 主要 API
@@ -15,7 +15,7 @@
 - `pcrepp::match_result`: キャプチャ取得。`get<T>(index_or_name)` で `std::string_view` / `std::string` / 整数 / `float` / `double` を取得。数値変換失敗は `T{}` を返す。`try_get<T>()` は `std::optional<T>`。
 - NTTP 版: `pcrepp::find<"...">`, `pcrepp::find_all<"...">`, `pcrepp::compile<"...">()`, `R"(...)"_re` リテラル。戻り値は tuple-like で構造化束縛可。
 - 内部: `pcrepp::detail::count_capture_groups` (constexpr)、`pcrepp::detail::tls_match_data_cache` (TLS バッファ再利用)。
-- CTRE フォールバック: `PCREPP_CTRE_FALLBACK=ON` で有効化。現在は可変長 lookbehind のみ CTRE に委譲（ネスト量化子の委譲は 2026-07 のベンチマーク結果により削除。PCRE2 の auto-possessify 最適化の方が高速のため）。後方参照・再帰を含むパターンは強制的に PCRE2 を使用。
+- CTRE フォールバック: `WITH_CTRE=ON` で有効化。現在は可変長 lookbehind のみ CTRE に委譲（ネスト量化子の委譲は 2026-07 のベンチマーク結果により削除。PCRE2 の auto-possessify 最適化の方が高速のため）。後方参照・再帰を含むパターンは強制的に PCRE2 を使用。
 
 ## ビルド
 
@@ -31,7 +31,7 @@
 ./build_win64.sh          # Windows 64bit (mingw64-cmake)
 
 # CTRE フォールバック付き
-cmake -B build_ctre -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DPCREPP_CTRE_FALLBACK=ON
+cmake -B build_ctre -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DWITH_CTRE=ON
 cmake --build build_ctre --parallel
 ```
 
@@ -91,7 +91,7 @@ NTTP 関連を触った場合は `count_capture_groups` 系の `static_assert` �
 
 CTRE フォールバックを触った場合:
 ```sh
-cmake -B build_ctre -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DPCREPP_CTRE_FALLBACK=ON
+cmake -B build_ctre -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DWITH_CTRE=ON
 cmake --build build_ctre --parallel && cd build_ctre && ctest --output-on-failure
 cd ..
 ```
@@ -102,7 +102,7 @@ cd ..
 `bench/` ディレクトリに Google Benchmark を使用したパフォーマンス計測があります。
 
 ```sh
-cmake -B build -DBUILD_BENCH=ON [-DPCREPP_CTRE_FALLBACK=ON] ...
+cmake -B build -DBUILD_BENCH=ON [-DWITH_CTRE=ON] ...
 cmake --build build --parallel
 ./build/bench/bench_main                                           # 全ベンチマーク
 ./build/bench/bench_main --benchmark_filter="BM_NttpFind|BM_Jit"   # 絞り込み
@@ -112,6 +112,6 @@ cmake --build build --parallel
 主なベンチマークグループ:
 - `BM_NttpFind_*` / `BM_JitFind_*` / `BM_NoJitFind_*` — find (first match) の 3 経路比較
 - `BM_NttpFindAll_*` / `BM_JitFindAll_*` / `BM_NoJitFindAll_*` — find_all 比較
-- `BM_Adversarial_*` — `(a|aa|aaa)+[b-z]` の敵対的パターン（`PCREPP_CTRE_FALLBACK=ON` 時は `BM_DirectCtre_*` で CTRE 直接呼び出しも計測）
+- `BM_Adversarial_*` — `(a|aa|aaa)+[b-z]` の敵対的パターン（`WITH_CTRE=ON` 時は `BM_DirectCtre_*` で CTRE 直接呼び出しも計測）
 
 `bench_compare.cpp` は CTRE 委譲の要否を判断するためのデータを生成する。新しい委譲条件を追加する際は、このファイルにベンチマークを追加し PCRE2-only と CTRE 有効の両方で比較すること。

@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.25)
 project(pcrepp VERSION 0.1.0 LANGUAGES CXX)
 
-option(ENABLE_TESTS "Enable tests" ON)
+option(BUILD_TEST "Enable tests" ON)
 option(BUILD_BENCH "Build benchmarks" OFF)
-option(PCREPP_CTRE_FALLBACK "Enable automatic fallback to CTRE for PCRE2-unfriendly patterns" OFF)
-option(ENABLE_GLAZE "Enable Glaze reflection integration (requires glaze)" OFF)
+option(WITH_CTRE "Enable automatic fallback to CTRE for PCRE2-unfriendly patterns" OFF)
+option(WITH_GLAZE "Enable Glaze reflection integration (requires glaze)" OFF)
 
 set(PCREPP_OPTIMIZATION_FLAG_REGEX "(^|[ \t])-O[^ \t]+")
 set(PCREPP_CPU_TUNING_FLAG_REGEX "(^|[ \t])-(march|mcpu|mtune)=[^ \t]+")
@@ -54,7 +54,7 @@ include(CMakePackageConfigHelpers)
 find_package(PCRE2 CONFIG REQUIRED)
 find_package(FastFloat CONFIG REQUIRED)
 
-if(PCREPP_CTRE_FALLBACK)
+if(WITH_CTRE)
   find_package(ctre CONFIG REQUIRED)
 endif()
 
@@ -69,12 +69,12 @@ target_include_directories(pcrepp
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
-if(PCREPP_CTRE_FALLBACK)
+if(WITH_CTRE)
   target_link_libraries(pcrepp INTERFACE ctre::ctre)
-  target_compile_definitions(pcrepp INTERFACE PCREPP_CTRE_FALLBACK=1)
+  target_compile_definitions(pcrepp INTERFACE WITH_CTRE=1)
 endif()
 
-if(ENABLE_GLAZE)
+if(WITH_GLAZE)
   find_package(glaze CONFIG REQUIRED)
   target_link_libraries(pcrepp INTERFACE glaze::glaze)
   target_compile_definitions(pcrepp INTERFACE PCREPP_GLAZE=1)
@@ -89,16 +89,16 @@ install(FILES
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
-if(PCREPP_CTRE_FALLBACK)
-  set(PCREPP_CTRE_FALLBACK_FIND_DEP "find_dependency(ctre CONFIG)")
+if(WITH_CTRE)
+  set(WITH_CTRE_FIND_DEP "find_dependency(ctre CONFIG)")
 else()
-  set(PCREPP_CTRE_FALLBACK_FIND_DEP "")
+  set(WITH_CTRE_FIND_DEP "")
 endif()
 
-if(ENABLE_GLAZE)
-  set(ENABLE_GLAZE_FIND_DEP "find_dependency(glaze CONFIG)")
+if(WITH_GLAZE)
+  set(WITH_GLAZE_FIND_DEP "find_dependency(glaze CONFIG)")
 else()
-  set(ENABLE_GLAZE_FIND_DEP "")
+  set(WITH_GLAZE_FIND_DEP "")
 endif()
 
 configure_package_config_file(
@@ -125,7 +125,7 @@ install(EXPORT pcreppTargets
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/pcrepp"
 )
 
-if(ENABLE_TESTS)
+if(BUILD_TEST)
     enable_testing()
     add_subdirectory(test)
 endif()

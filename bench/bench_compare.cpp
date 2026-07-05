@@ -37,7 +37,7 @@
 #include <unordered_map>
 #include <vector>
 
-#ifdef PCREPP_CTRE_FALLBACK
+#ifdef WITH_CTRE
 #include <ctre.hpp>
 #endif
 
@@ -344,7 +344,7 @@ BENCHMARK(BM_Quick_JitMatch);
 // ===================================================================
 //  直接 CTRE (CTRE フォールバック有効時のみ)
 // ===================================================================
-#ifdef PCREPP_CTRE_FALLBACK
+#ifdef WITH_CTRE
 static void BM_DirectCtre_AdvMatch(benchmark::State& state) {
   auto const& text = get_adv_match_text();
   constexpr auto cp = ctll::fixed_string{"(a|aa|aaa)+[b-z]"};

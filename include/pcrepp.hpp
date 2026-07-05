@@ -34,7 +34,7 @@
 #define PCREPP_HAS_FROZENCHARS
 #endif
 
-#ifdef PCREPP_CTRE_FALLBACK
+#ifdef WITH_CTRE
 #include <ctre.hpp>
 #endif
 
@@ -1587,7 +1587,7 @@ inline constexpr auto auto_utf_options(std::string_view const pattern) noexcept 
   return 0;
 }
 
-#ifdef PCREPP_CTRE_FALLBACK
+#ifdef WITH_CTRE
 /**
  * @brief パターンが CTRE で処理すべきか constexpr 判定
  *
@@ -1793,7 +1793,7 @@ consteval auto to_ctre_pattern() {
   constexpr auto sv = Pattern.view();
   return ctll::fixed_string<Pattern.length>{ctll::construct_from_pointer, sv.data()};
 }
-#endif  // PCREPP_CTRE_FALLBACK
+#endif  // WITH_CTRE
 
 template <fixed_string Pattern, bool UseJIT = true>
 inline auto get_nttp_context() -> context<UseJIT> const& {
@@ -1846,7 +1846,7 @@ auto get(nttp_match_result<Pattern, UseJIT> const& result) noexcept {
 template <fixed_string Pattern, bool UseJIT = true>
 auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0)
   -> std::expected<nttp_find_result_t<Pattern, UseJIT>, std::string> {
-#ifdef PCREPP_CTRE_FALLBACK
+#ifdef WITH_CTRE
   if constexpr (detail::use_ctre_for_pattern_v<Pattern>) {
     constexpr auto cp = detail::to_ctre_pattern<Pattern>();
     auto const sv = target.substr(start);
@@ -1897,7 +1897,7 @@ auto find_unchecked(std::string_view const target, size_t const start = 0uz, uns
  */
 template <fixed_string Pattern, bool UseJIT = true>
 auto find_all(std::string_view const target, unsigned int const option = 0) {
-#ifdef PCREPP_CTRE_FALLBACK
+#ifdef WITH_CTRE
   if constexpr (detail::use_ctre_for_pattern_v<Pattern>) {
     constexpr auto cp = detail::to_ctre_pattern<Pattern>();
     return ctre::search_all<cp>(target) | std::views::transform([](auto const& m) {
