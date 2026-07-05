@@ -5,6 +5,7 @@
     "catch2",
     "fast-float",
     "frozenchars",
-    "ctre"
+    "ctre",
+    "glaze"
   ]
 }

@@ -4,6 +4,7 @@ project(pcrepp VERSION 0.1.0 LANGUAGES CXX)
 option(ENABLE_TESTS "Enable tests" ON)
 option(BUILD_BENCH "Build benchmarks" OFF)
 option(PCREPP_CTRE_FALLBACK "Enable automatic fallback to CTRE for PCRE2-unfriendly patterns" OFF)
+option(ENABLE_GLAZE "Enable Glaze reflection integration (requires glaze)" OFF)
 
 set(PCREPP_OPTIMIZATION_FLAG_REGEX "(^|[ \t])-O[^ \t]+")
 set(PCREPP_CPU_TUNING_FLAG_REGEX "(^|[ \t])-(march|mcpu|mtune)=[^ \t]+")
@@ -73,11 +74,18 @@ if(PCREPP_CTRE_FALLBACK)
   target_compile_definitions(pcrepp INTERFACE PCREPP_CTRE_FALLBACK=1)
 endif()
 
+if(ENABLE_GLAZE)
+  find_package(glaze CONFIG REQUIRED)
+  target_link_libraries(pcrepp INTERFACE glaze::glaze)
+  target_compile_definitions(pcrepp INTERFACE PCREPP_GLAZE=1)
+endif()
+
 install(TARGETS pcrepp
     EXPORT pcreppTargets
 )
 install(FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/include/pcrepp.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/pcrepp_glaze.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
@@ -85,6 +93,12 @@ if(PCREPP_CTRE_FALLBACK)
   set(PCREPP_CTRE_FALLBACK_FIND_DEP "find_dependency(ctre CONFIG)")
 else()
   set(PCREPP_CTRE_FALLBACK_FIND_DEP "")
+endif()
+
+if(ENABLE_GLAZE)
+  set(ENABLE_GLAZE_FIND_DEP "find_dependency(glaze CONFIG)")
+else()
+  set(ENABLE_GLAZE_FIND_DEP "")
 endif()
 
 configure_package_config_file(

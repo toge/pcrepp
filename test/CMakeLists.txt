@@ -2,6 +2,7 @@ find_package(Catch2 REQUIRED CONFIG)
 find_package(frozenchars CONFIG)   # REQUIRED を外す — CI 環境では不要
 
 file(GLOB test_src test_*.cpp)
+list(FILTER test_src EXCLUDE REGEX "test_glaze\\.cpp$")
 
 if(EMSCRIPTEN)
   # Emscripten: vcpkg がインストールした Catch2 静的ライブラリは
@@ -61,3 +62,11 @@ endif()
 target_include_directories(all_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(all_test PRIVATE cxx_std_23)
 add_test(NAME all_test COMMAND all_test)
+
+if(ENABLE_GLAZE)
+  add_executable(test_glaze test_glaze.cpp)
+  target_link_libraries(test_glaze PRIVATE pcrepp ${_catch2_targets} glaze::glaze)
+  target_include_directories(test_glaze PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_features(test_glaze PRIVATE cxx_std_23)
+  add_test(NAME test_glaze COMMAND test_glaze)
+endif()
