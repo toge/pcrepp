@@ -208,7 +208,7 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
   // - depth   : ブランチリセット内で開いている括弧の深さ
   struct br_state { size_t current; size_t max; size_t depth; };
 
-  // ネスト用スタック (深さ 64 まで対応。制限を超えると誤ったカウントになる)
+  /// @attention br_stack の制限: 深さ 64 まで。超過時は誤カウントになる。
   std::array<br_state, 64uz> br_stack{};
   auto capture_count = 0uz;  // 最終的なキャプチャ数
   auto br_depth    = 0uz;  // アクティブな (?|...) のネスト数 (0 = なし)
@@ -598,7 +598,7 @@ struct match_result {
     pcre2_code const* code    = nullptr;
     pcre2_match_data* data    = nullptr;
     size_t*           ovector = nullptr;
-    std::string_view  target  = {};
+    std::string_view  target  = {};  ///< @brief 非所有。get() コール時点で元の文字列が生存している必要あり
 
     data_holder(pcre2_code const* c) : code(c) {
       if (code) {
@@ -952,9 +952,11 @@ struct iterator {
   unsigned int option = 0;
   bool is_end = true;
   match_result result;
+  std::string* error_ref = nullptr;
 
   iterator() = default;
-  iterator(context<UseJIT> const* c, std::string_view t, size_t p, unsigned int o, bool end);
+  iterator(context<UseJIT> const* c, std::string_view t, size_t p, unsigned int o, bool end,
+           std::string* err = nullptr);
 
   auto operator++() -> iterator&;
   auto operator++(int) -> iterator {
@@ -980,10 +982,21 @@ template <bool UseJIT>
 struct match_range : std::ranges::view_interface<match_range<UseJIT>> {
   iterator<UseJIT> first;
   iterator<UseJIT> last;
+  std::string m_error;
 
   match_range() = default;
-  match_range(iterator<UseJIT> f, iterator<UseJIT> l) : first(f), last(l) {}
+  match_range(iterator<UseJIT> f, iterator<UseJIT> l,
+              std::string* err = nullptr) : first(f), last(l) {
+    if (err) {
+      first.error_ref = err;
+      last.error_ref  = err;
+    }
+  }
 
+  auto error() const -> std::string_view { return m_error; }
+  explicit operator bool() const noexcept { return m_error.empty(); }
+
+  auto front() const -> match_result { return *begin(); }
   constexpr auto begin() const { return first; }
   constexpr auto end() const { return last; }
 };
@@ -1000,6 +1013,7 @@ struct context {
 private:
   pcre2_code*          code      = nullptr;
   pcre2_match_context* match_ctx = nullptr;  ///< 制限設定用。nullptr は「制限なし」
+  PCRE2_SIZE           jit_size_ = 0;       ///< JIT コードサイズ（キャッシュ用）
   friend struct match_result;
 
 public:
@@ -1030,9 +1044,10 @@ public:
   context(context const&) = delete;
   auto operator=(context const&) -> context& = delete;
 
-  context(context&& other) noexcept : code(other.code), match_ctx(other.match_ctx) {
+  context(context&& other) noexcept : code(other.code), match_ctx(other.match_ctx), jit_size_(other.jit_size_) {
     other.code      = nullptr;
     other.match_ctx = nullptr;
+    other.jit_size_ = 0;
   }
   auto operator=(context&& other) noexcept -> context& {
     if (this != &other) {
@@ -1040,8 +1055,10 @@ public:
       if (match_ctx) { pcre2_match_context_free(match_ctx); }
       code            = other.code;
       match_ctx       = other.match_ctx;
+      jit_size_       = other.jit_size_;
       other.code      = nullptr;
       other.match_ctx = nullptr;
+      other.jit_size_ = 0;
     }
     return *this;
   }
@@ -1096,6 +1113,8 @@ public:
       }
     }
     this->code = c;
+    this->jit_size_ = 0;
+    std::ignore = pcre2_pattern_info(c, PCRE2_INFO_JITSIZE, &this->jit_size_);
     return {};
   }
 
@@ -1140,6 +1159,7 @@ public:
     for (auto i = 0u; i < name_count; ++i) {
       auto const* entry = name_table + i * name_entry_size;
       auto const  idx   = static_cast<int>((static_cast<unsigned>(entry[0]) << 8u) | static_cast<unsigned>(entry[1]));
+      // PCRE2 仕様により名称は entry+2 以降に NUL 終端で格納される
       auto const  name  = std::string{reinterpret_cast<char const*>(entry + 2)};
       result.emplace_back(name, idx);
     }
@@ -1220,9 +1240,7 @@ public:
     }
     auto const rc = [&] -> int {
       if constexpr (UseJIT) {
-        PCRE2_SIZE jit_size = 0;
-        pcre2_pattern_info(code, PCRE2_INFO_JITSIZE, &jit_size);
-        if (jit_size > 0) [[likely]] {
+        if (jit_size_ > 0) [[likely]] {
           return pcre2_jit_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
         }
         // JIT が利用可能でなかった場合は Interpreter にフォールバック
@@ -1355,6 +1373,7 @@ public:
       return buffer;
     }
     // バッファが足りない場合は必要なサイズをもとに再試行
+    auto   fail_code = rc;
     if (rc == PCRE2_ERROR_NOMEMORY) {
       buffer.resize(blen);
       auto const rc2 = pcre2_substitute(
@@ -1372,8 +1391,11 @@ public:
         buffer.resize(blen);
         return buffer;
       }
+      fail_code = rc2;
     }
-    return std::unexpected{"Replace error."};
+    auto err_msg = std::array<PCRE2_UCHAR8, 256uz>{};
+    pcre2_get_error_message(fail_code, err_msg.data(), err_msg.size());
+    return std::unexpected{"Substitute error (code " + std::to_string(fail_code) + "): " + reinterpret_cast<char const*>(err_msg.data())};
   }
 
   /**
@@ -1391,18 +1413,29 @@ public:
     auto result = std::string{};
     result.reserve(target.size() + (target.size() / 5uz) + 256uz);
 
-    auto last_pos = 0uz;
-    for (auto& mr : find_all(target)) {
+    auto append_pos = 0uz;
+    auto search_pos = 0uz;
+    auto mr         = match_result{*this};
+    while (true) {
+      auto const rc = find(target, mr, search_pos, 0);
+      if (not rc) {
+        return std::unexpected{rc.error()};
+      }
+      if (*rc <= 0) {
+        break;
+      }
       auto const start = mr.start_pos();
       auto const end   = mr.end_pos();
-      result.append(target.substr(last_pos, start - last_pos));
+      result.append(target.substr(append_pos, start - append_pos));
       result.append(callback(mr));
-      // find_all のイテレータがゼロ幅マッチでも自動的に 1 文字進めるため、
-      // ここでは last_pos を end に設定するだけでよい（二重インクリメント不要）
-      last_pos = end;
+      append_pos = end;
+      search_pos = (start == end) ? end + 1uz : end;
+      if (search_pos > target.size()) {
+        break;
+      }
     }
-    if (last_pos < target.size()) {
-      result.append(target.substr(last_pos));
+    if (append_pos < target.size()) {
+      result.append(target.substr(append_pos));
     }
     return result;
   }
@@ -1436,10 +1469,12 @@ public:
    * @return match_range<UseJIT>
    */
   auto find_all(std::string_view const target, unsigned int const option = 0, size_t const start = 0uz) const -> match_range<UseJIT> {
-    return {
-      iterator<UseJIT>(this, target, start, option, false),
-      iterator<UseJIT>(this, target, start, option, true)
-    };
+    auto range = match_range<UseJIT>{};
+    range.first = iterator<UseJIT>(this, target, start, option, false);
+    range.first.error_ref = &range.m_error;
+    range.last  = iterator<UseJIT>(this, target, start, option, true);
+    range.last.error_ref  = &range.m_error;
+    return range;
   }
 
   /**
@@ -1613,13 +1648,10 @@ constexpr auto ctre_recommended(std::string_view const pattern) noexcept -> bool
   auto comment_parens = 0uz;
   auto verb_parens    = 0uz;
 
-  auto depth           = 0uz;
-  auto in_lookbehind   = false;
+  auto depth                = 0uz;
+  auto in_lookbehind        = false;
+  auto has_var_lookbehind   = false;
   auto has_backref_or_recurse = false;
-
-  auto const is_quant = [](char const c) noexcept {
-    return c == '*' || c == '+' || c == '{' || c == '?';
-  };
 
   for (auto i = 0uz; i < pattern.size(); ++i) {
     auto const ch = pattern[i];
@@ -1694,9 +1726,20 @@ constexpr auto ctre_recommended(std::string_view const pattern) noexcept -> bool
     }
 
     // 量化子が可変長 lookbehind 内にある → CTRE 推奨
-    if (is_quant(ch)) {
+    if (ch == '*' || ch == '+' || ch == '?') {
       if (in_lookbehind) {
-        return true;
+        has_var_lookbehind = true;
+      }
+      continue;
+    }
+    if (ch == '{') {
+      if (in_lookbehind) {
+        for (auto j = i + 1uz; j < pattern.size(); ++j) {
+          auto const nc = pattern[j];
+          if (nc == '}') break;
+          if (nc == ',') { has_var_lookbehind = true; break; }
+          if (nc < '0' || nc > '9') break;
+        }
       }
       continue;
     }
@@ -1748,7 +1791,10 @@ constexpr auto ctre_recommended(std::string_view const pattern) noexcept -> bool
     }
   }
 
-  return has_backref_or_recurse ? false : false;
+  if (has_var_lookbehind && !has_backref_or_recurse) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -2135,10 +2181,14 @@ inline match_result::match_result(context<UseJIT, JITFlags> const& ctx, size_t o
 }
 
 template <bool UseJIT>
-inline iterator<UseJIT>::iterator(context<UseJIT> const* c, std::string_view t, size_t p, unsigned int o, bool end) : ctx(c), target(t), pos(p), option(o), is_end(end) {
+inline iterator<UseJIT>::iterator(context<UseJIT> const* c, std::string_view t, size_t p, unsigned int o, bool end,
+                                   std::string* err) : ctx(c), target(t), pos(p), option(o), is_end(end), error_ref(err) {
   if (!is_end && ctx) {
     result = match_result(*ctx);
     if (auto const rc = ctx->find(target, result, pos, option); not rc || *rc <= 0) {
+      if (not rc && error_ref) {
+        *error_ref = rc.error();
+      }
       is_end = true;
     }
   }
@@ -2155,9 +2205,10 @@ inline auto iterator<UseJIT>::operator++() -> iterator& {
       is_end = true;
       return *this;
     }
-    // match_result を再利用: find() が既存の data_holder の ovector を上書きするため、
-    // 新規ヒープ確保なしで次のマッチ結果を受け取れる。
     if (auto const rc = ctx->find(target, result, pos, option); not rc || *rc <= 0) {
+      if (not rc && error_ref) {
+        *error_ref = rc.error();
+      }
       is_end = true;
     }
   }
