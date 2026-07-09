@@ -111,7 +111,7 @@ for (auto const& result : all) {
 - **`re.match(target, option)`** (`std::expected<bool, std::string>`)
 - **`re.replace(target, replacement, option)`** / **`re.replace(target, callback)`**
 - **`re.split(target, option)`**
-- **`pcrepp::substitute_flags::*`**（`global`, `extended`, `literal` など）
+- 置換オプションには PCRE2 定数を直接使用（`PCRE2_SUBSTITUTE_GLOBAL`, `PCRE2_SUBSTITUTE_EXTENDED` など）
 #### 利点
 
 - **構造化束縛しやすい**: `auto [matched, ...] = find<...>(...)` のように直接展開可能

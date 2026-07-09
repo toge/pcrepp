@@ -71,7 +71,7 @@ bool matched = *r;
 - `match_result::to_tuple<N>()`
 - `std::formatter<nttp_match_result>`
 - `nttp_regex::replace / split`
-- `substitute_flags::*`
+- 置換オプション: PCRE2 定数を直接使用（`PCRE2_SUBSTITUTE_GLOBAL` 等）
 - `context::capture_count/named_captures/pattern_size/jit_size/options`
 - `context::set_*_limit / set_offset_limit`
 - `context<UseJIT, JITFlags>`

@@ -389,10 +389,10 @@ TEST_CASE("match_result to_tuple<N>", "[match_result][f6]") {
 // ========================================
 // M4: E1/E3/E5/E6/E10/E11
 // ========================================
-TEST_CASE("substitute_flags::extended enables ${1} syntax", "[replace][e6]") {
+TEST_CASE("PCRE2_SUBSTITUTE_EXTENDED enables ${1} syntax", "[replace][e6]") {
   auto const ctx = pcrepp::context<true>::create(R"((\w+))").value();
   auto const res = ctx.replace("hello", "${1}!",
-    pcrepp::substitute_flags::global | pcrepp::substitute_flags::extended);
+    PCRE2_SUBSTITUTE_GLOBAL | PCRE2_SUBSTITUTE_EXTENDED);
   REQUIRE(res);
   CHECK(*res == "hello!");
 }
@@ -469,7 +469,7 @@ TEST_CASE("match_result move and self assignment", "[match_result][h3]") {
 TEST_CASE("replace with non-default substitute option", "[replace][h5]") {
   auto const ctx = pcrepp::context<>::create(R"((\w+))").value();
   auto const res = ctx.replace("hello", "${1}",
-    pcrepp::substitute_flags::global | pcrepp::substitute_flags::extended);
+    PCRE2_SUBSTITUTE_GLOBAL | PCRE2_SUBSTITUTE_EXTENDED);
   REQUIRE(res);
   CHECK(*res == "hello");
 }

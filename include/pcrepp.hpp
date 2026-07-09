@@ -58,27 +58,21 @@ namespace pcrepp {
 inline constexpr unsigned int no_utf_check = PCRE2_NO_UTF_CHECK;
 
 /**
- * @brief pcre2_substitute の option 定数群（E6）
+ * @brief pcre2_substitute の option には PCRE2 定数を直接使用する
  *
- * `context::replace(target, replacement, option)` の `option` に組み合わせて使用する。
+ * `context::replace(target, replacement, option)` の `option` に PCRE2 の置換フラグを組み合わせて使用する。
  * ```cpp
- * ctx.replace(target, "$1", pcrepp::substitute_flags::global | pcrepp::substitute_flags::extended);
+ * ctx.replace(target, "$1", PCRE2_SUBSTITUTE_GLOBAL | PCRE2_SUBSTITUTE_EXTENDED);
  * ```
+ *
+ * 主なフラグ:
+ * - `PCRE2_SUBSTITUTE_GLOBAL` : 全箇所を置換する（デフォルト動作）
+ * - `PCRE2_SUBSTITUTE_EXTENDED` : 置換文字列で $1、${1}、\U...\E 等の拡張構文を有効にする
+ * - `PCRE2_SUBSTITUTE_OVERFLOW_LENGTH` : バッファ不足時に必要サイズを返す
+ * - `PCRE2_SUBSTITUTE_REPLACEMENT_ONLY` : 置換後の文字列のみ返す（マッチしない部分を除外）
+ * - `PCRE2_SUBSTITUTE_UNKNOWN_UNSET` : 未定義の名前付きキャプチャを空文字列として扱う
+ * - `PCRE2_SUBSTITUTE_UNSET_EMPTY` : 未マッチのキャプチャグループを空文字列として扱う
  */
-namespace substitute_flags {
-  /// @brief 全箇所を置換する（デフォルト動作）
-  inline constexpr unsigned int global           = PCRE2_SUBSTITUTE_GLOBAL;
-  /// @brief 置換文字列で $1、${1}、\U...\E 等の拡張構文を有効にする
-  inline constexpr unsigned int extended         = PCRE2_SUBSTITUTE_EXTENDED;
-  /// @brief バッファ不足時に必要サイズを返す
-  inline constexpr unsigned int overflow_length  = PCRE2_SUBSTITUTE_OVERFLOW_LENGTH;
-  /// @brief 置換後の文字列のみ返す（マッチしない部分を除外）
-  inline constexpr unsigned int replacement_only = PCRE2_SUBSTITUTE_REPLACEMENT_ONLY;
-  /// @brief 未定義の名前付きキャプチャを空文字列として扱う
-  inline constexpr unsigned int unknown_unset    = PCRE2_SUBSTITUTE_UNKNOWN_UNSET;
-  /// @brief 未マッチのキャプチャグループを空文字列として扱う
-  inline constexpr unsigned int unset_empty      = PCRE2_SUBSTITUTE_UNSET_EMPTY;
-}  // namespace substitute_flags
 
 /**
  * @struct fixed_string
@@ -1016,6 +1010,11 @@ private:
   PCRE2_SIZE           jit_size_ = 0;       ///< JIT コードサイズ（キャッシュ用）
   friend struct match_result;
 
+  /// @brief match_ctx が未生成なら生成する（遅延初期化）
+  void ensure_match_context() {
+    if (not match_ctx) { match_ctx = pcre2_match_context_create(nullptr); }
+  }
+
 public:
   context() = default;
   context(std::string_view const src, unsigned int option = 0) {
@@ -1196,28 +1195,28 @@ public:
 
   /// @brief マッチ再帰回数の上限を設定する（バックトラック制限）
   auto set_match_limit(uint32_t const limit) -> context& {
-    if (not match_ctx) { match_ctx = pcre2_match_context_create(nullptr); }
+    ensure_match_context();
     pcre2_set_match_limit(match_ctx, limit);
     return *this;
   }
 
   /// @brief バックトラックスタック深度の上限を設定する
   auto set_depth_limit(uint32_t const limit) -> context& {
-    if (not match_ctx) { match_ctx = pcre2_match_context_create(nullptr); }
+    ensure_match_context();
     pcre2_set_depth_limit(match_ctx, limit);
     return *this;
   }
 
   /// @brief ヒープメモリ使用量の上限を設定する（キロバイト単位）
   auto set_heap_limit(uint32_t const limit) -> context& {
-    if (not match_ctx) { match_ctx = pcre2_match_context_create(nullptr); }
+    ensure_match_context();
     pcre2_set_heap_limit(match_ctx, limit);
     return *this;
   }
 
   /// @brief マッチ検索のオフセット上限を設定する（バイト単位）
   auto set_offset_limit(size_t const limit) -> context& {
-    if (not match_ctx) { match_ctx = pcre2_match_context_create(nullptr); }
+    ensure_match_context();
     pcre2_set_offset_limit(match_ctx, static_cast<PCRE2_SIZE>(limit));
     return *this;
   }
