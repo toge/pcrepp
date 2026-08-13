@@ -589,21 +589,24 @@ struct context;
  */
 struct match_result {
   struct data_holder {
-    pcre2_code const* code    = nullptr;
-    pcre2_match_data* data    = nullptr;
-    size_t*           ovector = nullptr;
-    std::string_view  target  = {};  ///< @brief 非所有。get() コール時点で元の文字列が生存している必要あり
+    pcre2_code const* code          = nullptr;
+    pcre2_match_data* data          = nullptr;
+    size_t*           ovector       = nullptr;
+    size_t            ovector_count = 0uz;  ///< pcre2_get_ovector_count(data) のキャッシュ（get_view の範囲チェック用）
+    std::string_view  target        = {};  ///< @brief 非所有。get() コール時点で元の文字列が生存している必要あり
 
     data_holder(pcre2_code const* c) : code(c) {
       if (code) {
-        data    = pcre2_match_data_create_from_pattern(code, nullptr);
-        ovector = data ? pcre2_get_ovector_pointer(data) : nullptr;
+        data          = pcre2_match_data_create_from_pattern(code, nullptr);
+        ovector       = data ? pcre2_get_ovector_pointer(data) : nullptr;
+        ovector_count = data ? static_cast<size_t>(pcre2_get_ovector_count(data)) : 0uz;
       }
     }
 
     /// @brief 既存の pcre2_match_data を受け取るコンストラクタ（E11 oversized match_data 用）
     data_holder(pcre2_code const* c, pcre2_match_data* d) : code(c), data(d) {
-      ovector = data ? pcre2_get_ovector_pointer(data) : nullptr;
+      ovector       = data ? pcre2_get_ovector_pointer(data) : nullptr;
+      ovector_count = data ? static_cast<size_t>(pcre2_get_ovector_count(data)) : 0uz;
     }
 
     ~data_holder() {
@@ -796,7 +799,7 @@ struct match_result {
   auto     operator[](std::string_view const name) const noexcept -> std::string_view { return get(name); }
   explicit operator bool() const noexcept { return holder && holder->data; }
 
-  auto size() const noexcept -> size_t { return holder ? pcre2_get_ovector_count(holder->data) : 0uz; }
+  auto size() const noexcept -> size_t { return holder ? holder->ovector_count : 0uz; }
 
   // イテレーション対応
   struct group_iterator {
@@ -813,6 +816,11 @@ struct match_result {
       ++index;
       return *this;
     }
+    auto operator++(int) noexcept -> group_iterator {
+      auto tmp = *this;
+      ++(*this);
+      return tmp;
+    }
     auto operator*() const noexcept -> std::string_view { return res->get(index); }
     auto operator==(group_iterator const& other) const noexcept -> bool { return index == other.index; }
   };
@@ -822,6 +830,22 @@ struct match_result {
 
   auto start_pos() const noexcept -> size_t { return holder ? holder->ovector[0] : 0uz; }
   auto end_pos()   const noexcept -> size_t { return holder ? holder->ovector[1] : 0uz; }
+
+  /// @brief インデックスがコンパイル時に確定している経路用の範囲チェックなし取得
+  ///
+  /// `detail::match_result_to_tuple_impl` は `Is < N`（N はパターンの
+  /// `count_capture_groups` から確定）が静的保証されるため安全。
+  auto get_view_unchecked(size_t const index) const noexcept -> std::string_view {
+    auto const s = holder->ovector[index * 2uz + 0uz];
+    auto const e = holder->ovector[index * 2uz + 1uz];
+    if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
+      return {};
+    }
+    if (s > holder->target.size()) {
+      return {};
+    }
+    return holder->target.substr(s, e - s);
+  }
 
 private:
   /**
@@ -850,7 +874,7 @@ private:
 
   auto try_get_view(size_t const index) const noexcept -> std::optional<std::string_view> {
     if (not holder || not holder->data) return std::nullopt;
-    if (index >= pcre2_get_ovector_count(holder->data)) return std::nullopt;
+    if (index >= holder->ovector_count) return std::nullopt;
     auto const s = holder->ovector[index * 2uz];
     auto const e = holder->ovector[index * 2uz + 1uz];
     if (s == PCRE2_UNSET || e == PCRE2_UNSET) return std::nullopt;
@@ -861,6 +885,9 @@ private:
 
   auto get_view(size_t const index) const noexcept -> std::string_view {
     if (not holder || not holder->data) {
+      return {};
+    }
+    if (index >= holder->ovector_count) {
       return {};
     }
     auto const s = holder->ovector[index * 2uz + 0uz];
@@ -905,7 +932,9 @@ namespace detail {
  */
 template <size_t N, size_t... Is>
 auto match_result_to_tuple_impl(match_result const& mr, std::index_sequence<Is...>) -> nttp_match_tuple_t<N> {
-  return std::make_tuple(mr.get(Is)...);
+  // Is はすべて N 未満であることが静的保証されるため、get_view の範囲チェックを
+  // スキップする unchecked 版を使用する（NTTP find_all のホットパス）。
+  return std::make_tuple(mr.get_view_unchecked(Is)...);
 }
 
 /**
@@ -979,12 +1008,42 @@ struct match_range : std::ranges::view_interface<match_range<UseJIT>> {
   std::string m_error;
 
   match_range() = default;
-  match_range(iterator<UseJIT> f, iterator<UseJIT> l,
-              std::string* err = nullptr) : first(f), last(l) {
-    if (err) {
-      first.error_ref = err;
-      last.error_ref  = err;
+  match_range(iterator<UseJIT> f, iterator<UseJIT> l)
+    : first(std::move(f)), last(std::move(l)) {
+    first.error_ref = &m_error;
+    last.error_ref  = &m_error;
+  }
+
+  // コピー/ムーブ時は error_ref が this->m_error を指すように付け直す
+  // （デフォルトコピーだとコピー元の破棄済み m_error を指してしまう）
+  match_range(match_range const& other) : first(other.first), last(other.last), m_error(other.m_error) {
+    first.error_ref = &m_error;
+    last.error_ref  = &m_error;
+  }
+  match_range(match_range&& other) noexcept
+    : first(std::move(other.first)), last(std::move(other.last)), m_error(std::move(other.m_error)) {
+    first.error_ref = &m_error;
+    last.error_ref  = &m_error;
+  }
+  auto operator=(match_range const& other) -> match_range& {
+    if (this != &other) {
+      first    = other.first;
+      last     = other.last;
+      m_error  = other.m_error;
+      first.error_ref = &m_error;
+      last.error_ref  = &m_error;
     }
+    return *this;
+  }
+  auto operator=(match_range&& other) noexcept -> match_range& {
+    if (this != &other) {
+      first    = std::move(other.first);
+      last     = std::move(other.last);
+      m_error  = std::move(other.m_error);
+      first.error_ref = &m_error;
+      last.error_ref  = &m_error;
+    }
+    return *this;
   }
 
   auto error() const -> std::string_view { return m_error; }
@@ -1468,12 +1527,11 @@ public:
    * @return match_range<UseJIT>
    */
   auto find_all(std::string_view const target, unsigned int const option = 0, size_t const start = 0uz) const -> match_range<UseJIT> {
-    auto range = match_range<UseJIT>{};
-    range.first = iterator<UseJIT>(this, target, start, option, false);
-    range.first.error_ref = &range.m_error;
-    range.last  = iterator<UseJIT>(this, target, start, option, true);
-    range.last.error_ref  = &range.m_error;
-    return range;
+    // prvalue で構築して guaranteed copy elision (C++17) を効かせる。
+    // ユーザー定義の copy/move ctor が存在すると NRVO が無効化されるため、
+    // 名前付きローカル変数ではなく直接 return する。
+    return match_range<UseJIT>{iterator<UseJIT>(this, target, start, option, false),
+                              iterator<UseJIT>(this, target, start, option, true)};
   }
 
   /**

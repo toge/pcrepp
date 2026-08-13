@@ -1,7 +1,7 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
-find_dependency(pcre2 CONFIG)
+find_dependency(PCRE2 CONFIG)
 find_dependency(FastFloat CONFIG)
 @WITH_CTRE_FIND_DEP@
 @WITH_GLAZE_FIND_DEP@

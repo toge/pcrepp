@@ -1,7 +1,53 @@
 #include "pcrepp.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <iterator>
 #include <string>
 #include <vector>
+
+// ========================================
+// レビュー修正の回帰テスト
+// ========================================
+TEST_CASE("match_result out-of-range access returns empty", "[match_result][oob]") {
+  auto const ctx = pcrepp::context<>::create(R"((\w+):(\d+))").value();
+  auto const res = ctx.find("age:30");
+  REQUIRE(res);
+  REQUIRE(*res);
+
+  CHECK(res->get(99uz).empty());
+  CHECK((*res)[99uz].empty());
+  CHECK(res->get<std::string>(99uz).empty());
+  CHECK(res->get<int>(99uz) == 0);
+}
+
+TEST_CASE("match_result group_iterator satisfies forward_iterator", "[match_result][iterator]") {
+  static_assert(std::forward_iterator<pcrepp::match_result::group_iterator>);
+
+  auto const ctx = pcrepp::context<>::create(R"((\w+):(\d+))").value();
+  auto const res = ctx.find("age:30");
+  REQUIRE(res);
+  REQUIRE(*res);
+
+  auto it = res->begin();
+  CHECK(*it++ == "age:30");  // 後置インクリメント
+  CHECK(*it == "age");
+  ++it;
+  CHECK(*it == "30");
+  ++it;
+  CHECK(it == res->end());
+}
+
+TEST_CASE("match_range copy re-binds error_ref to own m_error", "[match_range][copy]") {
+  auto const ctx = pcrepp::context<>::create(R"(\d+)").value();
+  auto range1 = ctx.find_all("1 2 3");
+  auto range2 = range1;  // コピー
+  auto range3 = std::move(range1);  // ムーブ
+
+  // コピー/ムーブ後も error_ref が自オブジェクトの m_error を指している
+  CHECK(range2.first.error_ref == &range2.m_error);
+  CHECK(range2.last.error_ref == &range2.m_error);
+  CHECK(range3.first.error_ref == &range3.m_error);
+  CHECK(range3.last.error_ref == &range3.m_error);
+}
 
 // ========================================
 // context::match() のテスト

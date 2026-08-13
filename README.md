@@ -88,19 +88,17 @@ if (auto r = pcrepp::find<R"((\w+):(\d+))">("age:30"); r && *r) {
 - **エラー時**: `expected::error()` で取得（`find_unchecked` は throw 版）
 #### `find_all<Pattern>(target, option = 0)`
 
-すべてのマッチを取得します。
+すべてのマッチを取得します。戻り値は遅延評価の view で、各要素はタプル `[whole, g1, g2, ...]` です。
 
 ```cpp
 auto all = pcrepp::find_all<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180", 0);
-for (auto const& result : all) {
-  if (not result) continue;
-  auto key = result.get<"key">();
-  auto value = result.get<"value">();
+for (auto const& [whole, key, value] : all) {
+  std::cout << "Key: " << key << ", Value: " << value << "\n";
 }
 ```
 
-- **戻り値**: `std::vector<nttp_match_result<Pattern, ...>>`
-- **エラー時**: `std::runtime_error` を送出
+- **戻り値**: 各要素が `[whole, g1, ...]`（N+1 要素）のタプルである遅延 view
+- **エラー時**: `std::runtime_error` を送出（パターンが無効な場合）
 
 #### `compile<Pattern>() / "..."_re`
 
