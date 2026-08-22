@@ -1,7 +1,7 @@
 find_package(Catch2 REQUIRED CONFIG)
-find_package(frozenchars CONFIG)   # REQUIRED を外す — CI 環境では不要
+find_package(frozenchars CONFIG)   # 任意依存 (見つからない場合は frozenchars 連携テストをスキップ)
 
-file(GLOB test_src test_*.cpp)
+file(GLOB test_src CONFIGURE_DEPENDS test_*.cpp)
 list(FILTER test_src EXCLUDE REGEX "test_glaze\\.cpp$")
 
 if(EMSCRIPTEN)

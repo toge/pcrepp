@@ -6,6 +6,7 @@
     "fast-float",
     "frozenchars",
     "ctre",
-    "glaze"
+    "glaze",
+    "benchmark"
   ]
 }

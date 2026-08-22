@@ -4,7 +4,7 @@
 
 ## エントリポイント
 
-- ライブラリ本体: `include/pcrepp.hpp` (約 1897 行、Doxygen 日本語コメント)
+- ライブラリ本体: `include/pcrepp.hpp` (約 2300 行、Doxygen 日本語コメント)
 - 公開 CMake ターゲット: `pcrepp::pcrepp` (INTERFACE ライブラリ)
 - 依存: `PCRE2::8BIT`, `FastFloat::fast_float` (必須)、`frozenchars::frozenchars` (任意、NTTP 連携のため)、`ctre` (任意、`WITH_CTRE=ON` 時に必要)
 - ランタイム PCRE2 シンボル定義: `PCRE2_CODE_UNIT_WIDTH 8`
@@ -35,7 +35,7 @@ cmake -B build_ctre -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpk
 cmake --build build_ctre --parallel
 ```
 
-CMake は `c++26` → `c++23` → `c++20` の順にフォールバック。GCC/Clang では `-O3 -march=native`、`-Wall -Wextra -pedantic` がデフォルトで付く。
+C++ 標準は `cxx_std_23` 固定。GCC/Clang では `-O3 -march=native`、`-Wall -Wextra -pedantic` 等の最適化・警告フラグは **pcrepp をトップレベルプロジェクトとしてビルドする場合のみ** 付与され (コンシューマへの漏出防止)、`-g3` は GCC 時に付く。
 
 ## テスト (Catch2)
 

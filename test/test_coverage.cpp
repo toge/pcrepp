@@ -479,6 +479,25 @@ TEST_CASE("context set_offset_limit restricts search range", "[e10]") {
   CHECK((!res.has_value() || (res.has_value() && !static_cast<bool>(*res))));
 }
 
+TEST_CASE("JIT context honors heap_limit by falling back to interpreter", "[e3][jit]") {
+  // pcre2_jit_match は heap_limit / depth_limit を無視する (公式ドキュメント記載)。
+  // これらの制限設定中は interpreter フォールバックで実行される。
+  // `(x+x+)+y` は指数バックトラックする古典的パターンで、heap_limit=20KB の
+  // interpreter 実行では確実に PCRE2_ERROR_HEAPLIMIT になる。
+  // 注: PCRE2 10.47 の JIT は実装上このケースでもエラーを返すため、本テストは
+  // 「制限が結果に反映されること」のリグレッションガードとして機能する
+  auto ctx = pcrepp::context<true>::create("(x+x+)+y").value();
+#ifndef __EMSCRIPTEN__
+  REQUIRE(ctx.jit_size() > 0uz);  // JIT が有効な環境でのみ意味を持つテスト
+#endif
+  ctx.set_heap_limit(20u);
+  // y の直前が x でないことで、どの開始位置でもマッチが確定せず
+  // バックトラックが回り切る前に制限に達する
+  auto input = std::string(26, 'x') + " y";
+  auto const res = ctx.find(input);
+  CHECK(!res.has_value());
+}
+
 TEST_CASE("oversized match_result constructor works", "[e11]") {
   auto const ctx = pcrepp::context<true>::create(R"((\d+))").value();
   auto mr = pcrepp::match_result{ctx, 10uz};

@@ -18,9 +18,15 @@
 #include <vector>
 
 // C++23 std::generator サポート確認
-#if __has_include(<generator>) && __cpp_lib_generator >= 202207L
+// 注意: __cpp_lib_generator は <generator> を include した後でしか定義されないため、
+// 先にヘッダを取り込んでから機能テストマクロを判定する
+#if __has_include(<generator>)
 #include <generator>
+#if __cpp_lib_generator >= 202207L
 #define PCREPP_HAS_GENERATOR 1
+#else
+#define PCREPP_HAS_GENERATOR 0
+#endif
 #else
 #define PCREPP_HAS_GENERATOR 0
 #endif
@@ -105,14 +111,12 @@ struct fixed_string {
   constexpr fixed_string(frozenchars::FrozenString<M> const& src) {
     static_assert(M <= N, "FrozenString capacity is too large");
     auto const s = src.sv();
+    // 内容が capacity を超える場合は黙って切り詰めない
+    // (切り詰めると「別パターン」として静的解析・コンパイルされてしまう)。
+    // NTTP 用途では constexpr 評価されるため throw はコンパイルエラーになる
     if (s.size() >= N) {
-      // 念のため終端NUL分を残して切り詰め
-      std::ranges::copy(s.substr(0uz, N - 1uz), value.begin());
-      value[N - 1uz] = '\0';
-      length = N - 1uz;
-      return;
+      throw std::length_error{"FrozenString content does not fit fixed_string capacity"};
     }
-
     std::ranges::copy(s.begin(), s.end(), value.begin());
     value[s.size()] = '\0';
     length = s.size();
@@ -836,6 +840,9 @@ struct match_result {
   /// `detail::match_result_to_tuple_impl` は `Is < N`（N はパターンの
   /// `count_capture_groups` から確定）が静的保証されるため安全。
   auto get_view_unchecked(size_t const index) const noexcept -> std::string_view {
+    if (not holder) {
+      return {};  // デフォルト構築 (未マッチ) の match_result からの呼び出しに備える
+    }
     auto const s = holder->ovector[index * 2uz + 0uz];
     auto const e = holder->ovector[index * 2uz + 1uz];
     if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
@@ -1067,6 +1074,12 @@ private:
   pcre2_code*          code      = nullptr;
   pcre2_match_context* match_ctx = nullptr;  ///< 制限設定用。nullptr は「制限なし」
   PCRE2_SIZE           jit_size_ = 0;       ///< JIT コードサイズ（キャッシュ用）
+  /// @brief JIT が無視する制限 (heap_limit / depth_limit) が設定されたか
+  ///
+  /// PCRE2 公式ドキュメント上、`pcre2_jit_match` は heap_limit と depth_limit を
+  /// 無視する (match_limit / offset_limit は JIT も尊重する)。これらの制限が設定
+  /// されている間は JIT を使わず interpreter (`pcre2_match`) で実行する。
+  bool                 has_jit_unsupported_limits_ = false;
   friend struct match_result;
 
   /// @brief match_ctx が未生成なら生成する（遅延初期化）
@@ -1102,10 +1115,11 @@ public:
   context(context const&) = delete;
   auto operator=(context const&) -> context& = delete;
 
-  context(context&& other) noexcept : code(other.code), match_ctx(other.match_ctx), jit_size_(other.jit_size_) {
+  context(context&& other) noexcept : code(other.code), match_ctx(other.match_ctx), jit_size_(other.jit_size_), has_jit_unsupported_limits_(other.has_jit_unsupported_limits_) {
     other.code      = nullptr;
     other.match_ctx = nullptr;
     other.jit_size_ = 0;
+    other.has_jit_unsupported_limits_ = false;
   }
   auto operator=(context&& other) noexcept -> context& {
     if (this != &other) {
@@ -1114,9 +1128,11 @@ public:
       code            = other.code;
       match_ctx       = other.match_ctx;
       jit_size_       = other.jit_size_;
+      has_jit_unsupported_limits_ = other.has_jit_unsupported_limits_;
       other.code      = nullptr;
       other.match_ctx = nullptr;
       other.jit_size_ = 0;
+      other.has_jit_unsupported_limits_ = false;
     }
     return *this;
   }
@@ -1253,6 +1269,8 @@ public:
   // ================================================================
 
   /// @brief マッチ再帰回数の上限を設定する（バックトラック制限）
+  ///
+  /// JIT 実行時もこの制限は尊重される (PCRE2 10.43 以降)
   auto set_match_limit(uint32_t const limit) -> context& {
     ensure_match_context();
     pcre2_set_match_limit(match_ctx, limit);
@@ -1260,20 +1278,30 @@ public:
   }
 
   /// @brief バックトラックスタック深度の上限を設定する
+  ///
+  /// 注意: depth_limit は JIT で無視される (公式ドキュメント記載) ため、
+  /// 設定中は interpreter で実行される
   auto set_depth_limit(uint32_t const limit) -> context& {
     ensure_match_context();
     pcre2_set_depth_limit(match_ctx, limit);
+    has_jit_unsupported_limits_ = true;
     return *this;
   }
 
   /// @brief ヒープメモリ使用量の上限を設定する（キロバイト単位）
+  ///
+  /// 注意: heap_limit は JIT で無視される (公式ドキュメント記載) ため、
+  /// 設定中は interpreter で実行される
   auto set_heap_limit(uint32_t const limit) -> context& {
     ensure_match_context();
     pcre2_set_heap_limit(match_ctx, limit);
+    has_jit_unsupported_limits_ = true;
     return *this;
   }
 
   /// @brief マッチ検索のオフセット上限を設定する（バイト単位）
+  ///
+  /// JIT 実行時もこの制限は尊重される (PCRE2 10.43 以降)
   auto set_offset_limit(size_t const limit) -> context& {
     ensure_match_context();
     pcre2_set_offset_limit(match_ctx, static_cast<PCRE2_SIZE>(limit));
@@ -1298,10 +1326,12 @@ public:
     }
     auto const rc = [&] -> int {
       if constexpr (UseJIT) {
-        if (jit_size_ > 0) [[likely]] {
+        // heap_limit / depth_limit は pcre2_jit_match で無視されるため、
+        // 設定中は interpreter で実行して制限を確実に効かせる
+        if (jit_size_ > 0 && not has_jit_unsupported_limits_) [[likely]] {
           return pcre2_jit_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
         }
-        // JIT が利用可能でなかった場合は Interpreter にフォールバック
+        // JIT が利用可能でなかった場合・JIT 非対応の制限設定中は Interpreter を使用
       }
       return pcre2_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
     }();

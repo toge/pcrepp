@@ -1,4 +1,4 @@
-build
+build*/
 build_static
 save-commands.json
 

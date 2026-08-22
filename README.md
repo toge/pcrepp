@@ -12,7 +12,7 @@
 ## 動作要件
 
 - **C++ コンパイラ**: C++23 以降をサポートするコンパイラ（GCC 14+, Clang 18+, MSVC 19.36+ 推奨）。
-- **依存ライブラリ**: PCRE2 (8-bit 版)。
+- **依存ライブラリ**: PCRE2 (8-bit 版)、[fast_float](https://github.com/fastfloat/fast_float) (数値変換に必須)。
 
 ## インストール方法
 
