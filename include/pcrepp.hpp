@@ -1936,6 +1936,151 @@ inline auto get_nttp_context() -> context<UseJIT> const& {
   }
   return *ctx_res;
 }
+
+/**
+ * @brief NTTP 置換文字列のトークン種別
+ */
+struct nttp_repl_token {
+  enum class kind_t : unsigned char { literal, capture_number, capture_name };
+  kind_t           kind;
+  size_t           number;  ///< capture_number 用 (capture_name では未使用)
+  std::string_view text;    ///< literal 用テキスト / capture_name 用の名前
+
+  /// @brief 番号がキャプチャ数上限を超えた際の飽和値 (フォールバック判定用)
+  static constexpr auto saturated = ~size_t{0};
+};
+
+/**
+ * @brief 置換文字列を走査し、トークンごとに visit(kind, number, text) を呼ぶ
+ *
+ * 対応構文 (pcre2_substitute の標準サブセット):
+ * - `$$`            : リテラル `$`
+ * - `$n` / `$nn...` : 数字列を貪欲に読む (PCRE2 と同じ挙動)
+ * - `${n}`          : 波括弧形式の番号
+ * - `${name}` / `$name` : 名前付きキャプチャ ([A-Za-z0-9_]+)
+ *
+ * 上記以外 (`$` で終端、空の `${}`、閉じ波括弧なし等) は false を返す。
+ * 呼び出し側は false の場合ランタイム経路 (pcre2_substitute) にフォールバックする。
+ */
+template <typename Visit>
+constexpr auto for_each_nttp_repl_token(std::string_view const repl, Visit&& visit) -> bool {
+  auto constexpr is_digit = [](char const c) { return c >= '0' && c <= '9'; };
+  auto constexpr is_name_char = [](char const c) {
+    auto const u = static_cast<unsigned char>(c);
+    return (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') || (u >= '0' && u <= '9') || u == '_';
+  };
+
+  auto i = 0uz;
+  while (true) {
+    // 次の '$' までをリテラルトークンとして吐く
+    auto j = i;
+    while (j < repl.size() && repl[j] != '$') { ++j; }
+    if (j > i) {
+      visit(nttp_repl_token::kind_t::literal, 0uz, repl.substr(i, j - i));
+    }
+    if (j >= repl.size()) {
+      return true;
+    }
+
+    // repl[j] == '$'
+    if (j + 1uz >= repl.size()) {
+      return false;  // 末尾の単独 '$' (PCRE2 はエラー)
+    }
+    if (repl[j + 1uz] == '$') {
+      visit(nttp_repl_token::kind_t::literal, 0uz, repl.substr(j, 1uz));  // "$$"
+      i = j + 2uz;
+      continue;
+    }
+    if (repl[j + 1uz] == '{') {
+      auto const close = repl.find('}', j + 2uz);
+      if (close == std::string_view::npos || close == j + 2uz) {
+        return false;  // 閉じ括弧なし / 空 {}
+      }
+      auto const content = repl.substr(j + 2uz, close - (j + 2uz));
+      auto        number = 0uz;
+      auto const  all_digits = [&] {
+        for (auto const c : content) {
+          if (not is_digit(c)) { return false; }
+        }
+        return true;
+      }();
+      if (all_digits) {
+        // 飽和加算: 巨大数字のオーバーフローで誤って有効番号にならないようにする
+        for (auto const c : content) {
+          number = number > nttp_repl_token::saturated / 10uz ? nttp_repl_token::saturated
+                                                              : number * 10uz + static_cast<size_t>(c - '0');
+        }
+        visit(nttp_repl_token::kind_t::capture_number, number, {});
+      } else {
+        visit(nttp_repl_token::kind_t::capture_name, 0uz, content);
+      }
+      i = close + 1uz;
+      continue;
+    }
+    if (is_digit(repl[j + 1uz])) {
+      auto number = 0uz;
+      auto k      = j + 1uz;
+      while (k < repl.size() && is_digit(repl[k])) {
+        number = number > nttp_repl_token::saturated / 10uz ? nttp_repl_token::saturated
+                                                            : number * 10uz + static_cast<size_t>(repl[k] - '0');
+        ++k;
+      }
+      visit(nttp_repl_token::kind_t::capture_number, number, {});
+      i = k;
+      continue;
+    }
+    if (is_name_char(repl[j + 1uz])) {
+      auto k = j + 1uz;
+      while (k < repl.size() && is_name_char(repl[k])) { ++k; }
+      visit(nttp_repl_token::kind_t::capture_name, 0uz, repl.substr(j + 1uz, k - (j + 1uz)));
+      i = k;
+      continue;
+    }
+    return false;  // '$' + 記号等 (PCRE2 は invalid replacement エラー)
+  }
+}
+
+/**
+ * @brief NTTP 置換文字列の静的解析結果
+ */
+template <fixed_string Replacement>
+struct nttp_repl_scan {
+  static constexpr auto repl = Replacement.view();
+
+  /// @brief トークン数 / 参照最大キャプチャ番号 / 解析可否
+  static constexpr auto summary = [] {
+    auto count   = 0uz;
+    auto max_ref = 0uz;
+    auto names   = 0uz;
+    auto const ok = for_each_nttp_repl_token(repl, [&](nttp_repl_token::kind_t const kind, size_t const number,
+                                                       std::string_view const) {
+      ++count;
+      if (kind == nttp_repl_token::kind_t::capture_number && number > max_ref) { max_ref = number; }
+      if (kind == nttp_repl_token::kind_t::capture_name) { ++names; }
+    });
+    struct result_t { bool ok; size_t count; size_t max_ref; size_t names; };
+    return result_t{ok, count, max_ref, names};
+  }();
+
+  /// @brief コンパイル時に確定したトークン配列を構築する (ok のときのみ呼んでよい)
+  ///
+  /// 静的データメンバではなく関数にしているのは、クラステンプレートの
+  /// 静的メンバ初期化子はクラス実体化時に評価されるため。解析不能パターン
+  /// (summary.ok == false、要素数 0 の std::array) では operator[] が
+  /// constexpr 不適合になるのを避ける意図がある。
+  static constexpr auto build_tokens() {
+    std::array<nttp_repl_token, summary.ok ? summary.count : 0uz> arr{};
+    auto w = 0uz;
+    for_each_nttp_repl_token(repl, [&](nttp_repl_token::kind_t const kind, size_t const number,
+                                       std::string_view const text) {
+      if (w < arr.size()) {
+        arr[w++] = nttp_repl_token{kind, number, text};
+      }
+    });
+    return arr;
+  }
+};
+
 }  // namespace detail
 
 /**
@@ -2044,6 +2189,190 @@ auto find_all(std::string_view const target, unsigned int const option = 0) {
       return detail::match_result_to_tuple<nttp_group_count_v<Pattern>>(mr);
     });
   }
+}
+
+/**
+ * @brief NTTP 版 replace：正規表現をテンプレート引数で指定する文字列置換
+ *
+ * パターンは `detail::get_nttp_context` によりプロセス内で 1 度だけコンパイルされる。
+ * 置換構文 ($1, ${name}, \U...\E 等) は pcre2_substitute に準拠する。
+ *
+ * ```cpp
+ * auto res = pcrepp::replace<R"((?<key>\w+)=(?<value>\d+))">("a=1 b=2", "$2:$1");
+ * // res == "1:a 2:b"
+ * ```
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+auto replace(std::string_view const target, std::string_view const replacement,
+             unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL)
+  -> std::expected<std::string, std::string> {
+  context<UseJIT> const* ctx_ptr = nullptr;
+  try {
+    ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
+  } catch (std::runtime_error const& e) {
+    return std::unexpected{std::string{e.what()}};
+  }
+  return ctx_ptr->replace(target, replacement, option);
+}
+
+/**
+ * @brief NTTP 版 replace：コールバックで動的に置換文字列を生成する
+ */
+template <fixed_string Pattern, bool UseJIT = true, typename F>
+  requires std::invocable<F, match_result const&>
+auto replace(std::string_view const target, F&& callback)
+  -> std::expected<std::string, std::string> {
+  context<UseJIT> const* ctx_ptr = nullptr;
+  try {
+    ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
+  } catch (std::runtime_error const& e) {
+    return std::unexpected{std::string{e.what()}};
+  }
+  return ctx_ptr->replace(target, std::forward<F>(callback));
+}
+
+/**
+ * @brief NTTP 版 replace の throw 版
+ *
+ * `replace<Pattern>()` の expected を unwrap して返す便利版。
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+auto replace_unchecked(std::string_view const target, std::string_view const replacement,
+                       unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL) -> std::string {
+  auto res = replace<Pattern, UseJIT>(target, replacement, option);
+  if (not res) {
+    throw std::runtime_error{"NTTP replace error: " + res.error()};
+  }
+  return std::move(*res);
+}
+
+/**
+ * @brief NTTP 版 callback replace の throw 版
+ */
+template <fixed_string Pattern, bool UseJIT = true, typename F>
+  requires std::invocable<F, match_result const&>
+auto replace_unchecked(std::string_view const target, F&& callback) -> std::string {
+  auto res = replace<Pattern, UseJIT>(target, std::forward<F>(callback));
+  if (not res) {
+    throw std::runtime_error{"NTTP replace error: " + res.error()};
+  }
+  return std::move(*res);
+}
+
+/**
+ * @brief NTTP 版 replace：パターンと置換文字列の両方をテンプレート引数で指定する高速版
+ *
+ * 置換文字列を constexpr でトークン化し、pcre2_substitute を介さず
+ * ovector から直接 emit することで置換時の `$` 再解析コストを排除する。
+ *
+ * 対応する置換構文: `$$`, `$n`, `${n}`, `${name}`, `$name`
+ * (PCRE2_SUBSTITUTE_EXTENDED の `\U...\E` 等は非対応)
+ *
+ * 静的解析で処理できない場合 (対応外構文・存在しないキャプチャ参照) は、
+ * エラー挙動を含めて PCRE2 と同一の結果を得るため既存のランタイム経路
+ * (`replace<Pattern>(target, replacement)`) に自動フォールバックする。
+ *
+ * ```cpp
+ * auto res = pcrepp::replace<R"((\w+):(\d+))", "$1=$2">("age:30");
+ * // res == "age=30"
+ * ```
+ */
+template <fixed_string Pattern, fixed_string Replacement, bool UseJIT = true>
+auto replace(std::string_view const target) -> std::expected<std::string, std::string> {
+  namespace dr = detail;
+  using scan_t = dr::nttp_repl_scan<Replacement>;
+
+  // 静的解析に失敗 / 存在しないキャプチャ参照がある場合はランタイム経路へ委譲し、
+  // pcre2_substitute 本来のエラー挙動をそのまま再現する
+  if constexpr (not scan_t::summary.ok || scan_t::summary.max_ref > detail::count_capture_groups(Pattern.view())) {
+    return replace<Pattern, UseJIT>(target, Replacement.view());
+  } else {
+    context<UseJIT> const* ctx_ptr = nullptr;
+    try {
+      ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
+    } catch (std::runtime_error const& e) {
+      return std::unexpected{std::string{e.what()}};
+    }
+
+    // 名前付きキャプチャを番号に解決 (プロセス内で 1 回)。失敗時はランタイム経路へ委譲。
+    static auto const plan = [&] {
+      struct plan_t {
+        std::array<dr::nttp_repl_token, scan_t::summary.count> tokens{};
+        bool valid = true;
+      };
+      auto p      = plan_t{};
+      p.tokens    = scan_t::build_tokens();
+      for (auto& tk : p.tokens) {
+        if (tk.kind != dr::nttp_repl_token::kind_t::capture_name) { continue; }
+        auto const ix = ctx_ptr->capture_index(tk.text);
+        if (ix < 0) {
+          p.valid = false;
+          break;
+        }
+        tk.kind   = dr::nttp_repl_token::kind_t::capture_number;
+        tk.number = static_cast<size_t>(ix);
+      }
+      return p;
+    }();
+    if (not plan.valid) {
+      return replace<Pattern, UseJIT>(target, Replacement.view());
+    }
+
+    auto out = std::string{};
+    out.reserve(target.size() + target.size() / 4uz + 64uz);
+
+    auto append_pos = 0uz;
+    auto search_pos = 0uz;
+    auto* md        = detail::get_tls_match_data(ctx_ptr->get_code());
+    while (true) {
+      auto const rc = ctx_ptr->find(target, md, search_pos, 0);
+      if (not rc) {
+        return std::unexpected{rc.error()};
+      }
+      if (*rc <= 0) {
+        break;
+      }
+      auto const* ov    = pcre2_get_ovector_pointer(md);
+      auto const  start = ov[0];
+      auto const  end   = ov[1];
+      out.append(target.substr(append_pos, start - append_pos));
+      for (auto const& tk : plan.tokens) {
+        if (tk.kind == dr::nttp_repl_token::kind_t::literal) {
+          out.append(tk.text);
+          continue;
+        }
+        auto const s = ov[tk.number * 2uz];
+        auto const e = ov[tk.number * 2uz + 1uz];
+        if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
+          // デフォルトオプションの pcre2_substitute と同様にエラー扱い
+          return std::unexpected{"NTTP replace: requested value is not set"};
+        }
+        if (s <= target.size() && s <= e) {
+          out.append(target.substr(s, e - s));
+        }
+      }
+      append_pos = end;
+      // ゼロ幅マッチでは 1 文字進めて無限ループを防ぐ (context::replace と同じ規約)
+      search_pos = (start == end) ? end + 1uz : end;
+      if (search_pos > target.size()) {
+        break;
+      }
+    }
+    out.append(target.substr(append_pos));
+    return out;
+  }
+}
+
+/**
+ * @brief NTTP 版高速 replace の throw 版
+ */
+template <fixed_string Pattern, fixed_string Replacement, bool UseJIT = true>
+auto replace_unchecked(std::string_view const target) -> std::string {
+  auto res = replace<Pattern, Replacement, UseJIT>(target);
+  if (not res) {
+    throw std::runtime_error{"NTTP replace error: " + res.error()};
+  }
+  return std::move(*res);
 }
 
 /**

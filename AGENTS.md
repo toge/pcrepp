@@ -13,7 +13,8 @@
 
 - `pcrepp::context<UseJIT = true>`: コンパイル済み正規表現。`create()` は `std::expected<context, std::string>`、コンストラクタは失敗時に `std::runtime_error`。
 - `pcrepp::match_result`: キャプチャ取得。`get<T>(index_or_name)` で `std::string_view` / `std::string` / 整数 / `float` / `double` を取得。数値変換失敗は `T{}` を返す。`try_get<T>()` は `std::optional<T>`。
-- NTTP 版: `pcrepp::find<"...">`, `pcrepp::find_all<"...">`, `pcrepp::compile<"...">()`, `R"(...)"_re` リテラル。戻り値は tuple-like で構造化束縛可。
+- NTTP 版: `pcrepp::find<"...">`, `pcrepp::find_all<"...">`, `pcrepp::replace<"...">(target, replacement[, option])` / `replace<"...">(target, callback)`, `pcrepp::compile<"...">()`, `R"(...)"_re` リテラル。戻り値は tuple-like で構造化束縛可。`replace` / `replace_unchecked` フリー関数はパターンを `get_nttp_context` キャッシュに委譲する (nttp_regex::replace と同じ経路)。
+- NTTP 高速 replace: `pcrepp::replace<Pattern, Replacement>(target)` / `pcrepp::replace_unchecked<Pattern, Replacement>(target)` (両方をテンプレート引数に取る 2 引数版)。置換文字列を constexpr トークン化 (`detail::for_each_nttp_repl_token` / `detail::nttp_repl_scan`) して pcre2_substitute を介さず ovector 直接 emit するため約 -40% 高速。対応構文は `$$` / `$n` / `${n}` / `${name}` / `$name` のみ。対応外構文・範囲外参照・未知名前は既存ランタイム経路へ自動フォールバックし PCRE2 と同一のエラー挙動を維持する。未マッチグループ参照は PCRE2 デフォルト同様エラー (`PCRE2_SUBSTITUTE_UNSET_EMPTY` 非対応)。テストは `[nttp_replace][fast]` タグ。
 - 内部: `pcrepp::detail::count_capture_groups` (constexpr)、`pcrepp::detail::tls_match_data_cache` (TLS バッファ再利用)。
 - CTRE フォールバック: `WITH_CTRE=ON` で有効化。現在は可変長 lookbehind のみ CTRE に委譲（ネスト量化子の委譲は 2026-07 のベンチマーク結果により削除。PCRE2 の auto-possessify 最適化の方が高速のため）。後方参照・再帰を含むパターンは強制的に PCRE2 を使用。
 

@@ -177,3 +177,117 @@ TEST_CASE("NTTP find with start offset", "[nttp_find][h19]") {
   REQUIRE(res);
   CHECK(res->get<1>() == "456");
 }
+
+TEST_CASE("NTTP free replace with string replacement", "[nttp_replace]") {
+  auto const res = pcrepp::replace<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180", "$1=$2");
+  REQUIRE(res);
+  CHECK(*res == "age=30 height=180");
+}
+
+TEST_CASE("NTTP free replace non-global", "[nttp_replace]") {
+  // PCRE2_SUBSTITUTE_GLOBAL を外すと最初の 1 箇所のみ置換
+  auto const res = pcrepp::replace<R"(\d+)">("a1b2c3", "#", 0);
+  REQUIRE(res);
+  CHECK(*res == "a#b2c3");
+}
+
+TEST_CASE("NTTP free replace with callback", "[nttp_replace]") {
+  auto const res = pcrepp::replace<R"((\w+):(\d+))">("age:30", [](auto const& m) -> std::string {
+    return "[" + std::string{m.get(1)} + "=" + std::string{m.get(2)} + "]";
+  });
+  REQUIRE(res);
+  CHECK(*res == "[age=30]");
+}
+
+TEST_CASE("NTTP replace_unchecked throws on invalid pattern", "[nttp_replace]") {
+  CHECK_THROWS_AS(pcrepp::replace_unchecked<R"([)">("abc", "x"), std::runtime_error);
+
+  auto const s = pcrepp::replace_unchecked<R"(\d+)">("v1 v22", "?");
+  CHECK(s == "v? v?");
+}
+
+TEST_CASE("NTTP free replace returns unexpected on invalid pattern", "[nttp_replace]") {
+  auto const res = pcrepp::replace<R"([)">("abc", "x");
+  CHECK_FALSE(res.has_value());
+}
+
+TEST_CASE("NTTP two-template-arg replace basic capture substitution", "[nttp_replace][fast]") {
+  auto const res = pcrepp::replace<R"((\w+):(\d+))", "$1=$2">("age:30 height:180");
+  REQUIRE(res);
+  CHECK(*res == "age=30 height=180");
+}
+
+TEST_CASE("NTTP fast replace $$ and braced forms", "[nttp_replace][fast]") {
+  auto const res = pcrepp::replace<R"((a)(b))", "$$${1}_${2}">("ab ab");
+  REQUIRE(res);
+  CHECK(*res == "$a_b $a_b");
+}
+
+TEST_CASE("NTTP fast replace with named captures", "[nttp_replace][fast]") {
+  auto const res = pcrepp::replace<R"((?<key>\w+)=(?<value>\d+))", "${value}:${key}">("age=30");
+  REQUIRE(res);
+  CHECK(*res == "30:age");
+
+  // 波括弧なしの名前参照
+  auto const res2 = pcrepp::replace<R"((?<key>\w+)=(?<value>\d+))", "$key">("age=30");
+  REQUIRE(res2);
+  // ランタイム経路 (pcre2_substitute) と同一結果になることを確認
+  auto const legacy2 = pcrepp::replace<R"((?<key>\w+)=(?<value>\d+))">("age=30", "$key");
+  REQUIRE(legacy2);
+  CHECK(*res2 == "age");
+  CHECK(*res2 == *legacy2);
+}
+
+TEST_CASE("NTTP fast replace adjacent references", "[nttp_replace][fast]") {
+  auto const res = pcrepp::replace<R"((\d)(\d))", "$1x$2y">("1234");
+  REQUIRE(res);
+  CHECK(*res == "1x2y3x4y");
+}
+
+TEST_CASE("NTTP fast replace zero-width matches match legacy path", "[nttp_replace][fast]") {
+  auto const target = std::string{"abc"};
+  auto const fast   = pcrepp::replace<R"(x*)", "-">(target);
+  auto const legacy = pcrepp::replace<R"(x*)">(target, "-");
+  REQUIRE(fast);
+  REQUIRE(legacy);
+  CHECK(*fast == *legacy);
+  CHECK(*fast == "-a-b-c-");
+}
+
+TEST_CASE("NTTP fast replace unset group is an error like PCRE2 default", "[nttp_replace][fast]") {
+  auto const res = pcrepp::replace<R"((x)?y)", "<$1>">("y");
+  CHECK_FALSE(res.has_value());
+}
+
+TEST_CASE("NTTP fast replace falls back to runtime path on out-of-range ref", "[nttp_replace][fast]") {
+  // 存在しないグループ参照 → フォールバックして pcre2_substitute のエラーを再現
+  auto const res = pcrepp::replace<R"((a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l))", "$123">("abcdefghijklm");
+  CHECK_FALSE(res.has_value());
+}
+
+TEST_CASE("NTTP fast replace falls back on invalid replacement syntax", "[nttp_replace][fast]") {
+  auto const res = pcrepp::replace<R"(a)", "X$">("abc");
+  CHECK_FALSE(res.has_value());
+}
+
+TEST_CASE("NTTP fast replace UseJIT=false", "[nttp_replace][fast]") {
+  auto const res = pcrepp::replace<R"((\d+))", "[\\1]", false>("a1b22");
+  REQUIRE(res);
+  // \1 は EXTENDED 非対応のためリテラル扱い (フォールバックしない、そのまま出力)
+  CHECK(*res == "a[\\1]b[\\1]");
+}
+
+TEST_CASE("NTTP replace_unchecked two-template-arg version", "[nttp_replace][fast]") {
+  auto const s = pcrepp::replace_unchecked<R"(\d+)", "?">("v1 v22");
+  CHECK(s == "v? v?");
+
+  // テンプレート引数のカンマは Catch2 マクロの引数分割と干渉するため
+  // マクロの外で実行して例外を確認する
+  auto threw = false;
+  try {
+    static_cast<void>(pcrepp::replace_unchecked<"[)", "?">("abc"));
+  } catch (std::runtime_error const&) {
+    threw = true;
+  }
+  CHECK(threw);
+}
