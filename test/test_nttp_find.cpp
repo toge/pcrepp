@@ -307,6 +307,7 @@ TEST_CASE("NTTP free split", "[nttp_split]") {
   CHECK(parts[2] == "c");
 }
 
+#if PCREPP_HAS_GENERATOR
 TEST_CASE("NTTP split_view lazy iteration", "[nttp_split]") {
   auto        count = 0uz;
   std::string_view last;
@@ -322,6 +323,7 @@ TEST_CASE("NTTP split_view lazy iteration", "[nttp_split]") {
   for ([[maybe_unused]] auto part : re.split_view("1-2-3")) { ++count; }
   CHECK(count == 3uz);
 }
+#endif
 
 TEST_CASE("NTTP find_all with start offset", "[nttp_find][h19]") {
   auto const all = pcrepp::find_all<R"(\d+)">("1 2 3 4", 0, 4uz);
