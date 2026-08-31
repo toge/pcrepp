@@ -88,7 +88,7 @@ auto extract_as(match_result const& mr) -> std::expected<T, std::string> {
 
   /// error_on_unknown_keys: regex 側の named capture が struct に存在するか確認
   if constexpr (Opts.error_on_unknown_keys) {
-    auto const regex_names = detail::get_regex_named_captures(mr.holder->code);
+    auto const regex_names = detail::get_regex_named_captures(mr.get_code());
     for (auto const& rname : regex_names) {
       auto found = false;
       [&]<size_t... I>(std::index_sequence<I...>) {

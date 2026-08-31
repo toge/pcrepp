@@ -213,6 +213,8 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
   auto br_current  = 0uz;  // 現在のブランチで数えたキャプチャ数
   auto br_max      = 0uz;  // 現在の (?|...) 内で最大だったブランチの値
   auto br_parens   = 0uz;  // 現在の (?|...) 内で開いている `(` の深さ
+  auto br_overflow_depth  = 0uz;  // br_stack 超過時の (?|...) ネスト深さ
+  auto br_overflow_parens = 0uz;  // br_stack 超過時の内部括弧深さ
 
   auto in_class    = false;  // [...] 内
   auto in_literal  = false;  // \Q...\E 内
@@ -318,7 +320,9 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
     }
 
     if (ch == '|') {
-      if (br_depth > 0uz) {
+      if (br_overflow_depth > 0uz) {
+        // オーバーフロー区間の `|` はブランチリセット外で扱う（親 (?|...) の計算に影響させない）
+      } else if (br_depth > 0uz) {
         br_max = (br_current > br_max) ? br_current : br_max;
         br_current = 0uz;
       }
@@ -326,7 +330,15 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
     }
 
     if (ch == ')') {
-      if (br_depth > 0uz) {
+      if (br_overflow_depth > 0uz) {
+        // オーバーフロー区間の `)` 処理: br_stack を壊さず深さだけ追跡
+        if (br_overflow_parens > 0uz) {
+          --br_overflow_parens;
+        } else {
+          --br_overflow_depth;
+          // オーバーフロー (?|...) 自体の閉じ。内部キャプチャは br_current に蓄積済み。
+        }
+      } else if (br_depth > 0uz) {
         if (br_parens > 0uz) {
           --br_parens;  // 内側グループの閉じ
         } else {
@@ -375,12 +387,17 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
 
     // (?|...) branch reset
     if (i + 2uz < pattern.size() && pattern[i + 1uz] == '?' && pattern[i + 2uz] == '|') {
-      if (br_depth < br_stack.size()) {
+      if (br_overflow_depth > 0uz) {
+        ++br_overflow_depth;  // 既にオーバーフロー中: さらに深くなった
+      } else if (br_depth < br_stack.size()) {
         br_stack[br_depth] = {br_current, br_max, br_parens};
         ++br_depth;
         br_current = 0uz;
         br_max = 0uz;
         br_parens = 0uz;
+      } else {
+        // br_stack が満杯: オーバーフロー追跡を開始（br_stack を壊さない）
+        ++br_overflow_depth;
       }
       i += 2uz;  // ?| をスキップ
       continue;
@@ -414,7 +431,13 @@ constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> 
 
     // ブランチリセット内の場合: どのグループも (キャプチャ・非キャプチャ問わず)
     // `(` の入れ子を追跡する必要がある。キャプチャならカウンタも増やす。
-    if (br_depth > 0uz) {
+    if (br_overflow_depth > 0uz) {
+      // オーバーフロー区間: 内側括弧の深さだけ追跡し、キャプチャは親の br_current に加算
+      ++br_overflow_parens;
+      if (is_capture) {
+        ++br_current;
+      }
+    } else if (br_depth > 0uz) {
       ++br_parens;
       if (is_capture) {
         ++br_current;
@@ -792,8 +815,9 @@ struct match_result {
   template <size_t N>
   auto to_tuple() const -> detail::string_view_tuple_t<N>;
 
+  /// @brief インデックスでキャプチャを取得する。範囲外の場合は空文字列を返す（例外なし）
   auto     operator[](size_t const index) const noexcept -> std::string_view { return get(index); }
-  /// @brief 負値を渡すと std::out_of_range を投げる
+  /// @brief インデックスでキャプチャを取得する。負値は std::out_of_range を投げ、範囲外の正値は空文字列を返す
   auto operator[](int const index) const -> std::string_view {
     if (index < 0) {
       throw std::out_of_range{"match_result::operator[]: negative index"};
@@ -802,7 +826,9 @@ struct match_result {
   }
   auto     operator[](std::string_view const name) const noexcept -> std::string_view { return get(name); }
   explicit operator bool() const noexcept { return holder && holder->data; }
-
+  /// @brief コンパイル済み正規表現コードへのポインタを返す
+  auto get_code() const noexcept -> pcre2_code const* { return holder ? holder->code : nullptr; }
+  /// @brief 全体マッチ + キャプチャグループの総数を返す (= capture_count + 1)
   auto size() const noexcept -> size_t { return holder ? holder->ovector_count : 0uz; }
 
   // イテレーション対応
@@ -902,7 +928,7 @@ private:
     if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
       return {};
     }
-    if (s > holder->target.size()) {
+    if (s > e || s > holder->target.size()) {
       return {};
     }
     return holder->target.substr(s, e - s);
@@ -1324,6 +1350,9 @@ public:
     if (not data) {
       return std::unexpected{"Match data is null."};
     }
+    if (start > target.size()) {
+      return std::unexpected{"start offset exceeds target size"};
+    }
     auto const rc = [&] -> int {
       if constexpr (UseJIT) {
         // heap_limit / depth_limit は pcre2_jit_match で無視されるため、
@@ -1736,8 +1765,9 @@ constexpr auto ctre_recommended(std::string_view const pattern) noexcept -> bool
   auto verb_parens    = 0uz;
 
   auto depth                = 0uz;
-  auto in_lookbehind        = false;
-  auto has_var_lookbehind   = false;
+  auto in_lookbehind         = false;
+  auto lookbehind_inner_depth = 0uz;  // ルックビハインド内部の括弧ネスト深さ
+  auto has_var_lookbehind    = false;
   auto has_backref_or_recurse = false;
 
   for (auto i = 0uz; i < pattern.size(); ++i) {
@@ -1833,6 +1863,7 @@ constexpr auto ctre_recommended(std::string_view const pattern) noexcept -> bool
 
     // 再帰・条件判定
     if (ch == '(' && i + 1uz < pattern.size()) {
+      auto const was_in_lookbehind = in_lookbehind;  // (?<= 自体の ( では増やさないため保存
       auto const next = pattern[i + 1uz];
       if (next == '?') {
         if (i + 2uz < pattern.size()) {
@@ -1863,13 +1894,20 @@ constexpr auto ctre_recommended(std::string_view const pattern) noexcept -> bool
         continue;
       }
 
+      if (was_in_lookbehind) {
+        ++lookbehind_inner_depth;  // ルックビハインド内部の括弧
+      }
       ++depth;
       continue;
     }
 
     if (ch == ')') {
       if (in_lookbehind) {
-        in_lookbehind = false;
+        if (lookbehind_inner_depth > 0uz) {
+          --lookbehind_inner_depth;  // 内側グループの閉じ
+        } else {
+          in_lookbehind = false;  // ルックビハインド自体の閉じ
+        }
       }
       if (depth > 0uz) {
         --depth;
@@ -2126,6 +2164,8 @@ auto find(std::string_view const target, size_t const start = 0uz, unsigned int 
   -> std::expected<nttp_find_result_t<Pattern, UseJIT>, std::string> {
 #ifdef WITH_CTRE
   if constexpr (detail::use_ctre_for_pattern_v<Pattern>) {
+    // CTRE パスでは option パラメータは無視される
+    // (このパターンは PCRE2 でコンパイル不可のため PCRE2 へのフォールバック不可)
     constexpr auto cp = detail::to_ctre_pattern<Pattern>();
     auto const sv = target.substr(start);
     if (auto m = ctre::search<cp>(sv)) {
@@ -2174,18 +2214,20 @@ auto find_unchecked(std::string_view const target, size_t const start = 0uz, uns
  * @brief NTTP 版 find_all：正規表現をテンプレート引数で指定する全マッチ検索
  */
 template <fixed_string Pattern, bool UseJIT = true>
-auto find_all(std::string_view const target, unsigned int const option = 0) {
+auto find_all(std::string_view const target, unsigned int const option = 0, size_t const start = 0uz) {
 #ifdef WITH_CTRE
   if constexpr (detail::use_ctre_for_pattern_v<Pattern>) {
+    // CTRE パスでは option パラメータは無視される
+    // (このパターンは PCRE2 でコンパイル不可のため PCRE2 へのフォールバック不可)
     constexpr auto cp = detail::to_ctre_pattern<Pattern>();
-    return ctre::search_all<cp>(target) | std::views::transform([](auto const& m) {
+    return ctre::search_all<cp>(target.substr(start)) | std::views::transform([](auto const& m) {
       return detail::ctre_match_to_tuple<Pattern>(m);
     });
   } else
 #endif
   {
     auto const& ctx = detail::get_nttp_context<Pattern, UseJIT>();
-    return ctx.find_all(target, option) | std::views::transform([](auto const& mr) {
+    return ctx.find_all(target, option, start) | std::views::transform([](auto const& mr) {
       return detail::match_result_to_tuple<nttp_group_count_v<Pattern>>(mr);
     });
   }
@@ -2278,15 +2320,22 @@ auto replace_unchecked(std::string_view const target, F&& callback) -> std::stri
  * ```
  */
 template <fixed_string Pattern, fixed_string Replacement, bool UseJIT = true>
-auto replace(std::string_view const target) -> std::expected<std::string, std::string> {
+auto replace(std::string_view const target, unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL)
+  -> std::expected<std::string, std::string> {
   namespace dr = detail;
   using scan_t = dr::nttp_repl_scan<Replacement>;
 
-  // 静的解析に失敗 / 存在しないキャプチャ参照がある場合はランタイム経路へ委譲し、
-  // pcre2_substitute 本来のエラー挙動をそのまま再現する
+  // 静的解析失敗・存在しないキャプチャ参照の場合はランタイム経路へ委譲
   if constexpr (not scan_t::summary.ok || scan_t::summary.max_ref > detail::count_capture_groups(Pattern.view())) {
-    return replace<Pattern, UseJIT>(target, Replacement.view());
+    return replace<Pattern, UseJIT>(target, Replacement.view(), option);
   } else {
+    // 高速パスでは PCRE2_SUBSTITUTE_GLOBAL のみ対応。
+    // 他フラグ (PCRE2_SUBSTITUTE_EXTENDED 等) 指定時はランタイム経路へフォールバック。
+    if ((option & ~static_cast<unsigned int>(PCRE2_SUBSTITUTE_GLOBAL)) != 0u) {
+      return replace<Pattern, UseJIT>(target, Replacement.view(), option);
+    }
+    auto const is_global = (option & PCRE2_SUBSTITUTE_GLOBAL) != 0u;
+
     context<UseJIT> const* ctx_ptr = nullptr;
     try {
       ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
@@ -2315,7 +2364,7 @@ auto replace(std::string_view const target) -> std::expected<std::string, std::s
       return p;
     }();
     if (not plan.valid) {
-      return replace<Pattern, UseJIT>(target, Replacement.view());
+      return replace<Pattern, UseJIT>(target, Replacement.view(), option);
     }
 
     auto out = std::string{};
@@ -2352,6 +2401,9 @@ auto replace(std::string_view const target) -> std::expected<std::string, std::s
         }
       }
       append_pos = end;
+      if (!is_global) {
+        break;  // 非グローバル置換: 最初の 1 件のみ
+      }
       // ゼロ幅マッチでは 1 文字進めて無限ループを防ぐ (context::replace と同じ規約)
       search_pos = (start == end) ? end + 1uz : end;
       if (search_pos > target.size()) {
@@ -2367,13 +2419,61 @@ auto replace(std::string_view const target) -> std::expected<std::string, std::s
  * @brief NTTP 版高速 replace の throw 版
  */
 template <fixed_string Pattern, fixed_string Replacement, bool UseJIT = true>
-auto replace_unchecked(std::string_view const target) -> std::string {
-  auto res = replace<Pattern, Replacement, UseJIT>(target);
+auto replace_unchecked(std::string_view const target, unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL) -> std::string {
+  auto res = replace<Pattern, Replacement, UseJIT>(target, option);
   if (not res) {
     throw std::runtime_error{"NTTP replace error: " + res.error()};
   }
   return std::move(*res);
 }
+
+/**
+ * @brief NTTP 版 match：正規表現をテンプレート引数で指定する完全一致判定
+ *
+ * `context::match(target, option)` の NTTP 版。
+ * JIT は PCRE2_ENDANCHORED をサポートしないため終端は手動検証される
+ * (context::match と同じ挙動)。
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+auto match(std::string_view const target, unsigned int const option = 0)
+  -> std::expected<bool, std::string> {
+  context<UseJIT> const* ctx_ptr = nullptr;
+  try {
+    ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
+  } catch (std::runtime_error const& e) {
+    return std::unexpected{std::string{e.what()}};
+  }
+  auto mr = match_result{*ctx_ptr};
+  return ctx_ptr->match(target, mr, option);
+}
+
+/**
+ * @brief NTTP 版 split：正規表現をテンプレート引数で指定する文字列分割
+ *
+ * `context::split(target, option)` の NTTP 版。パターンコンパイルは
+ * プロセス内で 1 度だけ行われる。
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+auto split(std::string_view const target, unsigned int const option = 0)
+  -> std::vector<std::string_view> {
+  return detail::get_nttp_context<Pattern, UseJIT>().split(target, option);
+}
+
+#if PCREPP_HAS_GENERATOR
+/**
+ * @brief NTTP 版 split_view：std::generator を用いた遅延評価版 split
+ *
+ * `context::split_view(target, option)` の NTTP 版。vector を確保せず、
+ * 大量分割時に省メモリ。
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+auto split_view(std::string_view const target, unsigned int const option = 0)
+  -> std::generator<std::string_view> {
+  for (auto&& part : detail::get_nttp_context<Pattern, UseJIT>().split_view(target, option)) {
+    co_yield std::move(part);
+  }
+}
+#endif
 
 /**
  * @brief NTTP 版正規表現オブジェクト
@@ -2400,11 +2500,12 @@ struct nttp_regex {
    * @brief 全てのマッチを検索
    * @param target 検索対象の文字列
    * @param option マッチオプション
+   * @param start 検索開始バイト位置
    * @return std::vector<detail::nttp_match_tuple_t<nttp_group_count_v<Pattern>>>
    * @note find_all は戻り値が [whole, g1, ...]（N+1 要素）
    */
-  auto find_all(std::string_view const target, unsigned int const option = 0) const {
-    return pcrepp::find_all<Pattern, UseJIT>(target, option);
+  auto find_all(std::string_view const target, unsigned int const option = 0, size_t const start = 0uz) const {
+    return pcrepp::find_all<Pattern, UseJIT>(target, option, start);
   }
 
   /**
@@ -2466,6 +2567,19 @@ struct nttp_regex {
     -> std::vector<std::string_view> {
     return detail::get_nttp_context<Pattern, UseJIT>().split(target, option);
   }
+
+#if PCREPP_HAS_GENERATOR
+  /**
+   * @brief 文字列分割の lazy view 版（context::split_view に委譲）
+   * @param target 分割対象の文字列
+   * @param option マッチオプション
+   */
+  auto split_view(std::string_view const target, unsigned int const option = 0) const
+    -> std::generator<std::string_view> {
+    co_yield std::ranges::elements_of(
+      detail::get_nttp_context<Pattern, UseJIT>().split_view(target, option));
+  }
+#endif
 };
 
 /**

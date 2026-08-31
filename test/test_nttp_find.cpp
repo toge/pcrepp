@@ -291,3 +291,48 @@ TEST_CASE("NTTP replace_unchecked two-template-arg version", "[nttp_replace][fas
   }
   CHECK(threw);
 }
+
+TEST_CASE("NTTP free match full-string check", "[nttp_match]") {
+  CHECK(pcrepp::match<R"(\d+)">("12345").value_or(false));
+  CHECK_FALSE(pcrepp::match<R"(\d+)">("123abc").value_or(false));
+  // 無効パターンは unexpected
+  CHECK_FALSE(pcrepp::match<"[)">("x").has_value());
+}
+
+TEST_CASE("NTTP free split", "[nttp_split]") {
+  auto const parts = pcrepp::split<R"(,\s*)">("a, b, c");
+  REQUIRE(parts.size() == 3uz);
+  CHECK(parts[0] == "a");
+  CHECK(parts[1] == "b");
+  CHECK(parts[2] == "c");
+}
+
+TEST_CASE("NTTP split_view lazy iteration", "[nttp_split]") {
+  auto        count = 0uz;
+  std::string_view last;
+  for (auto part : pcrepp::split_view<R"(\s+)">("x y z")) {
+    last = part;
+    ++count;
+  }
+  CHECK(count == 3uz);
+  CHECK(last == "z");
+
+  auto const re = pcrepp::compile<R"(-)">();
+  count         = 0uz;
+  for ([[maybe_unused]] auto part : re.split_view("1-2-3")) { ++count; }
+  CHECK(count == 3uz);
+}
+
+TEST_CASE("NTTP find_all with start offset", "[nttp_find][h19]") {
+  auto const all = pcrepp::find_all<R"(\d+)">("1 2 3 4", 0, 4uz);
+  auto       n   = 0uz;
+  for (auto const& [whole] : all) {
+    CHECK((whole == "3" || whole == "4"));
+    ++n;
+  }
+  CHECK(n == 2uz);
+
+  auto const re  = pcrepp::compile<R"([a-z]+)">();
+  auto const all2 = re.find_all("aa bb cc", 0, 3uz);
+  CHECK(std::ranges::distance(all2) == 2uz);
+}

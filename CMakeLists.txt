@@ -90,9 +90,12 @@ install(TARGETS pcrepp
 )
 install(FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/include/pcrepp.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/pcrepp_glaze.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+if(WITH_GLAZE)
+  install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/pcrepp_glaze.hpp
+      DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
 
 if(WITH_CTRE)
   set(WITH_CTRE_FIND_DEP "find_dependency(ctre CONFIG)")
