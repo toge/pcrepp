@@ -11,11 +11,16 @@
 #include <ranges>
 #include <tuple>
 #include <string>
-#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <type_traits>
 #include <vector>
+
+#ifndef PCREPP_WASI_MINIMAL
+#include <stdexcept>
+#else
+#include <cstdlib>
+#endif
 
 // C++23 std::generator サポート確認
 // 注意: __cpp_lib_generator は <generator> を include した後でしか定義されないため、
@@ -32,10 +37,11 @@
 #endif
 
 // frozencharsのヘッダが存在する場合は型変換のためにインクルードする
-#if __has_include(<frozenchars.hpp>)
+// (WASI Minimal では旧版ヘッダの throw が混ざるのを避けるため無効化)
+#if !defined(PCREPP_WASI_MINIMAL) && __has_include(<frozenchars.hpp>)
 #include <frozenchars.hpp>
 #define PCREPP_HAS_FROZENCHARS
-#elif __has_include(<frozenchars/frozenchars.hpp>)
+#elif !defined(PCREPP_WASI_MINIMAL) && __has_include(<frozenchars/frozenchars.hpp>)
 #include <frozenchars/frozenchars.hpp>
 #define PCREPP_HAS_FROZENCHARS
 #endif
@@ -56,6 +62,30 @@
 #include "pcre2.h"
 
 namespace pcrepp {
+
+/**
+ * @brief WASI Minimal モード設定
+ *
+ * `PCREPP_WASI_MINIMAL` が定義されると、ライブラリ内の全ての例外送出が
+ * `detail::fail()` (std::abort) に置き換わり、`-fno-exceptions` でも
+ * ビルドできる「例外なしモード」になる (frozenchars の
+ * `FROZENCHARS_WASI_MINIMAL` と同じ契約)。wasip1 をターゲットにした
+ * 最小構成の検証用で、手動で `-DPCREPP_WASI_MINIMAL=1` を指定する
+ * (wasm32-wasip1 でも自動では有効にならない)。
+ *
+ * 例外を投げる代わりに abort する API: `context` コンストラクタ、
+ * `replace_unchecked` 系、`find_unchecked` 系、`match_result::operator[](int)`、
+ * `fixed_string` の FrozenString コンストラクタ、`get_nttp_context`。
+ * `std::expected` を返す API (create/find/replace/match) は影響を受けない。
+ */
+namespace detail {
+#ifndef PCREPP_WASI_MINIMAL
+#define PCREPP_THROW(expr) throw expr
+#else
+[[noreturn]] inline void fail() noexcept { std::abort(); }
+#define PCREPP_THROW(expr) ::pcrepp::detail::fail()
+#endif
+}  // namespace detail
 
 /**
  * @brief 高速化のためのオプション定数
@@ -115,7 +145,7 @@ struct fixed_string {
     // (切り詰めると「別パターン」として静的解析・コンパイルされてしまう)。
     // NTTP 用途では constexpr 評価されるため throw はコンパイルエラーになる
     if (s.size() >= N) {
-      throw std::length_error{"FrozenString content does not fit fixed_string capacity"};
+      PCREPP_THROW(std::length_error{"FrozenString content does not fit fixed_string capacity"});
     }
     std::ranges::copy(s.begin(), s.end(), value.begin());
     value[s.size()] = '\0';
@@ -820,7 +850,7 @@ struct match_result {
   /// @brief インデックスでキャプチャを取得する。負値は std::out_of_range を投げ、範囲外の正値は空文字列を返す
   auto operator[](int const index) const -> std::string_view {
     if (index < 0) {
-      throw std::out_of_range{"match_result::operator[]: negative index"};
+      PCREPP_THROW(std::out_of_range{"match_result::operator[]: negative index"});
     }
     return get(static_cast<size_t>(index));
   }
@@ -1117,7 +1147,7 @@ public:
   context() = default;
   context(std::string_view const src, unsigned int option = 0) {
     if (auto const res = compile(src, option); !res) {
-      throw std::runtime_error{res.error()};
+      PCREPP_THROW(std::runtime_error{res.error()});
     }
   }
   ~context() {
@@ -1572,7 +1602,7 @@ public:
   auto replace_unchecked(std::string_view const target, F&& callback) const -> std::string {
     auto res = replace(target, std::forward<F>(callback));
     if (not res) {
-      throw std::runtime_error{res.error()};
+      PCREPP_THROW(std::runtime_error{res.error()});
     }
     return std::move(*res);
   }
@@ -1970,9 +2000,30 @@ template <fixed_string Pattern, bool UseJIT = true>
 inline auto get_nttp_context() -> context<UseJIT> const& {
   static auto const ctx_res = context<UseJIT>::create(Pattern.view(), auto_utf_options(Pattern.view()));
   if (not ctx_res) {
-    throw std::runtime_error{"NTTP context compile error: " + ctx_res.error()};
+    PCREPP_THROW(std::runtime_error{"NTTP context compile error: " + ctx_res.error()});
   }
   return *ctx_res;
+}
+
+/**
+ * @brief `get_nttp_context` の例外を expected に変換するラッパ
+ *
+ * NTTP 系 API はコンパイル失敗を `std::unexpected` で返すため、
+ * `get_nttp_context` の送出をここで集約する。WASI Minimal では
+ * `get_nttp_context` 内部で abort する (unexpected は返らない) ため、
+ * `-fno-exceptions` で拒否される `try`/`catch` を使わない。
+ */
+template <fixed_string Pattern, bool UseJIT = true>
+inline auto try_get_nttp_context() -> std::expected<context<UseJIT> const*, std::string> {
+#ifndef PCREPP_WASI_MINIMAL
+  try {
+    return &get_nttp_context<Pattern, UseJIT>();
+  } catch (std::runtime_error const& e) {
+    return std::unexpected{std::string{e.what()}};
+  }
+#else
+  return &get_nttp_context<Pattern, UseJIT>();
+#endif
 }
 
 /**
@@ -2176,12 +2227,11 @@ auto find(std::string_view const target, size_t const start = 0uz, unsigned int 
 #endif
   {
     // コンパイルエラーを例外ではなく unexpected として返す
-    context<UseJIT> const* ctx_ptr = nullptr;
-    try {
-      ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
-    } catch (std::runtime_error const& e) {
-      return std::unexpected{std::string{e.what()}};
+    auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+    if (not ctx_res) {
+      return std::unexpected{ctx_res.error()};
     }
+    auto const* ctx_ptr = *ctx_res;
     auto*      md  = detail::get_tls_match_data(ctx_ptr->get_code());
     auto const res = ctx_ptr->find(target, md, start, option);
     if (not res) {
@@ -2205,7 +2255,7 @@ auto find_unchecked(std::string_view const target, size_t const start = 0uz, uns
   -> nttp_find_result_t<Pattern, UseJIT> {
   auto res = find<Pattern, UseJIT>(target, start, option);
   if (not res) {
-    throw std::runtime_error{"NTTP find error: " + res.error()};
+    PCREPP_THROW(std::runtime_error{"NTTP find error: " + res.error()});
   }
   return std::move(*res);
 }
@@ -2248,13 +2298,11 @@ template <fixed_string Pattern, bool UseJIT = true>
 auto replace(std::string_view const target, std::string_view const replacement,
              unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL)
   -> std::expected<std::string, std::string> {
-  context<UseJIT> const* ctx_ptr = nullptr;
-  try {
-    ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
-  } catch (std::runtime_error const& e) {
-    return std::unexpected{std::string{e.what()}};
+  auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+  if (not ctx_res) {
+    return std::unexpected{ctx_res.error()};
   }
-  return ctx_ptr->replace(target, replacement, option);
+  return (*ctx_res)->replace(target, replacement, option);
 }
 
 /**
@@ -2264,13 +2312,11 @@ template <fixed_string Pattern, bool UseJIT = true, typename F>
   requires std::invocable<F, match_result const&>
 auto replace(std::string_view const target, F&& callback)
   -> std::expected<std::string, std::string> {
-  context<UseJIT> const* ctx_ptr = nullptr;
-  try {
-    ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
-  } catch (std::runtime_error const& e) {
-    return std::unexpected{std::string{e.what()}};
+  auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+  if (not ctx_res) {
+    return std::unexpected{ctx_res.error()};
   }
-  return ctx_ptr->replace(target, std::forward<F>(callback));
+  return (*ctx_res)->replace(target, std::forward<F>(callback));
 }
 
 /**
@@ -2283,7 +2329,7 @@ auto replace_unchecked(std::string_view const target, std::string_view const rep
                        unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL) -> std::string {
   auto res = replace<Pattern, UseJIT>(target, replacement, option);
   if (not res) {
-    throw std::runtime_error{"NTTP replace error: " + res.error()};
+    PCREPP_THROW(std::runtime_error{"NTTP replace error: " + res.error()});
   }
   return std::move(*res);
 }
@@ -2296,7 +2342,7 @@ template <fixed_string Pattern, bool UseJIT = true, typename F>
 auto replace_unchecked(std::string_view const target, F&& callback) -> std::string {
   auto res = replace<Pattern, UseJIT>(target, std::forward<F>(callback));
   if (not res) {
-    throw std::runtime_error{"NTTP replace error: " + res.error()};
+    PCREPP_THROW(std::runtime_error{"NTTP replace error: " + res.error()});
   }
   return std::move(*res);
 }
@@ -2336,12 +2382,11 @@ auto replace(std::string_view const target, unsigned int const option = PCRE2_SU
     }
     auto const is_global = (option & PCRE2_SUBSTITUTE_GLOBAL) != 0u;
 
-    context<UseJIT> const* ctx_ptr = nullptr;
-    try {
-      ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
-    } catch (std::runtime_error const& e) {
-      return std::unexpected{std::string{e.what()}};
+    auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+    if (not ctx_res) {
+      return std::unexpected{ctx_res.error()};
     }
+    auto const* ctx_ptr = *ctx_res;
 
     // 名前付きキャプチャを番号に解決 (プロセス内で 1 回)。失敗時はランタイム経路へ委譲。
     static auto const plan = [&] {
@@ -2422,7 +2467,7 @@ template <fixed_string Pattern, fixed_string Replacement, bool UseJIT = true>
 auto replace_unchecked(std::string_view const target, unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL) -> std::string {
   auto res = replace<Pattern, Replacement, UseJIT>(target, option);
   if (not res) {
-    throw std::runtime_error{"NTTP replace error: " + res.error()};
+    PCREPP_THROW(std::runtime_error{"NTTP replace error: " + res.error()});
   }
   return std::move(*res);
 }
@@ -2437,12 +2482,11 @@ auto replace_unchecked(std::string_view const target, unsigned int const option 
 template <fixed_string Pattern, bool UseJIT = true>
 auto match(std::string_view const target, unsigned int const option = 0)
   -> std::expected<bool, std::string> {
-  context<UseJIT> const* ctx_ptr = nullptr;
-  try {
-    ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
-  } catch (std::runtime_error const& e) {
-    return std::unexpected{std::string{e.what()}};
+  auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+  if (not ctx_res) {
+    return std::unexpected{ctx_res.error()};
   }
+  auto const* ctx_ptr = *ctx_res;
   auto mr = match_result{*ctx_ptr};
   return ctx_ptr->match(target, mr, option);
 }
@@ -2515,12 +2559,11 @@ struct nttp_regex {
    * @return std::expected<bool, std::string> 完全一致するか、エラーメッセージ
    */
   auto match(std::string_view const target, unsigned int const option = 0) const -> std::expected<bool, std::string> {
-    context<UseJIT> const* ctx_ptr = nullptr;
-    try {
-      ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
-    } catch (std::runtime_error const& e) {
-      return std::unexpected{std::string{e.what()}};
+    auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+    if (not ctx_res) {
+      return std::unexpected{ctx_res.error()};
     }
+    auto const* ctx_ptr = *ctx_res;
     auto mr = match_result{*ctx_ptr};
     return ctx_ptr->match(target, mr, option);
   }
@@ -2535,10 +2578,11 @@ struct nttp_regex {
   auto replace(std::string_view const target, std::string_view const replacement,
                unsigned int const option = PCRE2_SUBSTITUTE_GLOBAL) const
     -> std::expected<std::string, std::string> {
-    context<UseJIT> const* ctx_ptr = nullptr;
-    try { ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>(); }
-    catch (std::runtime_error const& e) { return std::unexpected{std::string{e.what()}}; }
-    return ctx_ptr->replace(target, replacement, option);
+    auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+    if (not ctx_res) {
+      return std::unexpected{ctx_res.error()};
+    }
+    return (*ctx_res)->replace(target, replacement, option);
   }
 
   /**
@@ -2551,10 +2595,11 @@ struct nttp_regex {
     requires std::invocable<F, match_result const&>
   auto replace(std::string_view const target, F&& callback) const
     -> std::expected<std::string, std::string> {
-    context<UseJIT> const* ctx_ptr = nullptr;
-    try { ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>(); }
-    catch (std::runtime_error const& e) { return std::unexpected{std::string{e.what()}}; }
-    return ctx_ptr->replace(target, std::forward<F>(callback));
+    auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+    if (not ctx_res) {
+      return std::unexpected{ctx_res.error()};
+    }
+    return (*ctx_res)->replace(target, std::forward<F>(callback));
   }
 
   /**

@@ -1,12 +1,24 @@
 {
   "name": "pcrepp",
   "dependencies": [
-    "pcre2",
-    "catch2",
+    "benchmark",
+    {
+      "name": "catch2",
+      "platform": "emscripten | !wasm32"
+    },
+    "ctre",
     "fast-float",
     "frozenchars",
-    "ctre",
     "glaze",
-    "benchmark"
+    {
+      "name": "pcre2",
+      "default-features": false,
+      "features": [
+        {
+          "name": "jit",
+          "platform": "!wasm32 & !ios"
+        }
+      ]
+    }
   ]
 }

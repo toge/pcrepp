@@ -165,13 +165,11 @@ template <fixed_string Pattern, glz::glaze_object_t T,
           glz::opts Opts = glz::opts{}, bool UseJIT = true>
 auto find_as(std::string_view target, size_t start = 0uz, unsigned int option = 0)
   -> std::expected<T, std::string> {
-  context<UseJIT> const* ctx_ptr = nullptr;
-  try {
-    ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
-  } catch (std::runtime_error const& e) {
-    return std::unexpected{std::string{e.what()}};
+  auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+  if (not ctx_res) {
+    return std::unexpected{ctx_res.error()};
   }
-  return find_as<T, Opts>(*ctx_ptr, target, start, option);
+  return find_as<T, Opts>(**ctx_res, target, start, option);
 }
 
 /**
@@ -188,12 +186,11 @@ template <fixed_string Pattern, glz::glaze_object_t T,
           glz::opts Opts = glz::opts{}, bool UseJIT = true>
 auto find_all_as(std::string_view target, unsigned int option = 0)
   -> std::expected<std::vector<T>, std::string> {
-  context<UseJIT> const* ctx_ptr = nullptr;
-  try {
-    ctx_ptr = &detail::get_nttp_context<Pattern, UseJIT>();
-  } catch (std::runtime_error const& e) {
-    return std::unexpected{std::string{e.what()}};
+  auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+  if (not ctx_res) {
+    return std::unexpected{ctx_res.error()};
   }
+  auto const* ctx_ptr = *ctx_res;
 
   std::vector<T> results;
   for (auto const& mr : ctx_ptr->find_all(target, option)) {

@@ -1,8 +1,23 @@
+# WASI_MINIMAL 向けスモークは常時ビルド可能（Catch2 不要・例外なし）
+add_executable(smoke_wasi_minimal smoke_wasi_minimal.cpp)
+target_link_libraries(smoke_wasi_minimal PRIVATE pcrepp)
+target_compile_features(smoke_wasi_minimal PRIVATE cxx_std_23)
+target_compile_definitions(smoke_wasi_minimal PRIVATE PCREPP_WASI_MINIMAL=1)
+# WASI_MINIMAL の契約 (例外なしでビルド可能) を hosted でも検証する
+target_compile_options(smoke_wasi_minimal PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-exceptions>)
+add_test(NAME smoke_wasi_minimal COMMAND smoke_wasi_minimal)
+
+if(ENABLE_WASI_MINIMAL)
+  # WASI_MINIMAL ビルドでは hosted なテストはスキップ
+  return()
+endif()
+
 find_package(Catch2 REQUIRED CONFIG)
 find_package(frozenchars CONFIG)   # 任意依存 (見つからない場合は frozenchars 連携テストをスキップ)
 
 file(GLOB test_src CONFIGURE_DEPENDS test_*.cpp)
 list(FILTER test_src EXCLUDE REGEX "test_glaze\\.cpp$")
+list(FILTER test_src EXCLUDE REGEX "smoke_.*\\.cpp$")
 
 if(EMSCRIPTEN)
   # Emscripten: vcpkg がインストールした Catch2 静的ライブラリは

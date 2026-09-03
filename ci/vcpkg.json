@@ -1,9 +1,0 @@
-{
-  "name": "pcrepp",
-  "dependencies": [
-    "pcre2",
-    "catch2",
-    "fast-float",
-    "ctre"
-  ]
-}
