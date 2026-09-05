@@ -14,24 +14,6 @@
 - **C++ コンパイラ**: C++23 以降をサポートするコンパイラ（GCC 14+, Clang 18+, MSVC 19.36+ 推奨）。
 - **依存ライブラリ**: PCRE2 (8-bit 版)、[fast_float](https://github.com/fastfloat/fast_float) (数値変換に必須)。
 
-## WASI Minimal モード
-
-wasip1 をターゲットにした最小構成向けに、例外なしモードを提供します。
-
-- **有効化**: `-DPCREPP_WASI_MINIMAL=1` (+ `-fno-exceptions`)、または CMake の `-DENABLE_WASI_MINIMAL=ON`
-- **効果**: ライブラリ内の全ての例外送出が `std::abort()` に置き換わる
-- **`std::expected` を返す API は影響なし**: `create` / `find` / `replace` / `match` / NTTP 版はそのまま使える
-- **対象外**: `*_unchecked` 系、`context` の throw コンストラクタ、`operator[](int)` の負値チェックは abort になる
-- **WASI 注意点**: PCRE2 は JIT なし (`pcre2[core]`) でビルドすること。SLJIT が `mmap` を要求し wasip1 でビルド不可のため。`context<false>` の使用を推奨
-
-```sh
-vcpkg install "pcre2[core]" --triplet=wasm32-wasip1
-cmake -B build-wasi -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
-  -DVCPKG_TARGET_TRIPLET=wasm32-wasip1 \
-  -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=$WASI_SDK/share/cmake/wasi-sdk-p1.cmake \
-  -DENABLE_WASI_MINIMAL=ON
-```
-
 ## インストール方法
 
 ### vcpkg を使用する場合

@@ -1,11 +1,9 @@
 /**
  * @file test/smoke_wasi_minimal.cpp
- * @brief PCREPP_WASI_MINIMAL モードの検証。
+ * @brief 例外なしビルド (-fno-exceptions) の検証。
  *
- * -fno-exceptions + PCREPP_WASI_MINIMAL 付きでビルドされる。
- * expected を返す主要 API (create/find/replace/match/split/NTTP版) が
- * 例外なしでコンパイル・実行できることを確認する。
- * 例外を投げる版 (unchecked 系・throw コンストラクタ) は対象外。
+ * Catch2 が使えない wasip1 CI 向けに、主要 API が例外なしで
+ * コンパイル・実行できることを確認する。
  */
 #include <cstdio>
 #include <string>
@@ -30,7 +28,7 @@ int main() {
   auto ctx_res = pcrepp::context<>::create(R"((\d+)-(\w+))");
   fails += check(static_cast<bool>(ctx_res), "create");
   if (not ctx_res) {
-    std::printf("SMOKE_WASI_MINIMAL_NG\n");
+    std::printf("SMOKE_NO_EXCEPTIONS_NG\n");
     return 1;
   }
   auto&      ctx    = *ctx_res;
@@ -74,9 +72,9 @@ int main() {
   fails += check(fr->operator[](-1).empty(), "mr[-1] empty");
 
   if (fails == 0) {
-    std::printf("SMOKE_WASI_MINIMAL_OK\n");
+    std::printf("SMOKE_NO_EXCEPTIONS_OK\n");
     return 0;
   }
-  std::printf("SMOKE_WASI_MINIMAL_NG\n");
+  std::printf("SMOKE_NO_EXCEPTIONS_NG\n");
   return 1;
 }

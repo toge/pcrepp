@@ -90,7 +90,7 @@ cd build && ctest --output-on-failure
 
 NTTP 関連を触った場合は `count_capture_groups` 系の `static_assert` を含む `[capture_count]` テストと `[nttp_find]` を必ず通す。TLS/スレッド周りを触った場合は `[tls][stress]` テスト (5000 回イテレーション) を通す。
 
-例外送出 (`throw`/`try`/`catch`) に触った場合、または `PCREPP_THROW` / `try_get_nttp_context` 周りを変更した場合は、例外なしビルドと wasip1 ビルドも確認する (frozenchars の `FROZENCHARS_WASI_MINIMAL` と同じ契約を維持するため)。
+例外送出 (`throw`/`try`/`catch`) に触った場合、または `try_get_nttp_context` 周りを変更した場合は、例外なしビルドも確認する。
 
 ```sh
 cmake --build build --target smoke_wasi_minimal && ./build/test/smoke_wasi_minimal

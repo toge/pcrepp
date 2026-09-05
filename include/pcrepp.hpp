@@ -16,11 +16,7 @@
 #include <utility>
 #include <vector>
 
-#ifndef PCREPP_WASI_MINIMAL
 #include <stdexcept>
-#else
-#include <cstdlib>
-#endif
 
 // C++23 std::generator サポート確認
 // 注意: __cpp_lib_generator は <generator> を include した後でしか定義されないため、
@@ -37,11 +33,10 @@
 #endif
 
 // frozencharsのヘッダが存在する場合は型変換のためにインクルードする
-// (WASI Minimal では旧版ヘッダの throw が混ざるのを避けるため無効化)
-#if !defined(PCREPP_WASI_MINIMAL) && __has_include(<frozenchars.hpp>)
+#if __has_include(<frozenchars.hpp>)
 #include <frozenchars.hpp>
 #define PCREPP_HAS_FROZENCHARS
-#elif !defined(PCREPP_WASI_MINIMAL) && __has_include(<frozenchars/frozenchars.hpp>)
+#elif __has_include(<frozenchars/frozenchars.hpp>)
 #include <frozenchars/frozenchars.hpp>
 #define PCREPP_HAS_FROZENCHARS
 #endif

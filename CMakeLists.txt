@@ -5,11 +5,6 @@ option(BUILD_TEST "Enable tests" ON)
 option(BUILD_BENCH "Build benchmarks" OFF)
 option(WITH_CTRE "Enable automatic fallback to CTRE for PCRE2-unfriendly patterns" OFF)
 option(WITH_GLAZE "Enable Glaze reflection integration (requires glaze)" OFF)
-option(ENABLE_WASI_MINIMAL "Enable WASI minimal (no exceptions) mode - wasi-sdk wasm32-wasip1 assumed" OFF)
-
-if(ENABLE_WASI_MINIMAL)
-  add_compile_definitions(PCREPP_WASI_MINIMAL=1)
-endif()
 
 set(PCREPP_OPTIMIZATION_FLAG_REGEX "(^|[ \t])-O[^ \t]+")
 set(PCREPP_CPU_TUNING_FLAG_REGEX "(^|[ \t])-(march|mcpu|mtune)=[^ \t]+")

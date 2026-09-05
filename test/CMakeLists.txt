@@ -1,14 +1,13 @@
-# WASI_MINIMAL 向けスモークは常時ビルド可能（Catch2 不要・例外なし）
+# 例外なしビルドのスモークテスト (wasip1 CI 向け。Catch2 不要)
 add_executable(smoke_wasi_minimal smoke_wasi_minimal.cpp)
 target_link_libraries(smoke_wasi_minimal PRIVATE pcrepp)
 target_compile_features(smoke_wasi_minimal PRIVATE cxx_std_23)
-target_compile_definitions(smoke_wasi_minimal PRIVATE PCREPP_WASI_MINIMAL=1)
-# WASI_MINIMAL の契約 (例外なしでビルド可能) を hosted でも検証する
 target_compile_options(smoke_wasi_minimal PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-exceptions>)
 add_test(NAME smoke_wasi_minimal COMMAND smoke_wasi_minimal)
 
-if(ENABLE_WASI_MINIMAL)
-  # WASI_MINIMAL ビルドでは hosted なテストはスキップ
+# Catch2 は wasm32-wasip1 に対応していないため、wasip1 ターゲットでは
+# smoke_wasi_minimal のみビルドして early return する。
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "wasm32")
   return()
 endif()
 
