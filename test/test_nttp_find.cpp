@@ -4,8 +4,9 @@
 #include <string_view>
 
 TEST_CASE("NTTP find supports structured binding via find_unchecked", "[nttp_find]") {
-  // C7: find_unchecked は throw 版
-  auto [matched, whole, key, value] = pcrepp::find_unchecked<R"((\w+):(\d+))">("age:30");
+  auto const res = pcrepp::find_unchecked<R"((\w+):(\d+))">("age:30");
+  REQUIRE(res.has_value());
+  auto const [matched, whole, key, value] = *res;
   CHECK(matched);
   CHECK(whole == "age:30");
   CHECK(key == "age");
@@ -41,29 +42,30 @@ TEST_CASE("NTTP find returns false result when no match", "[nttp_find]") {
 }
 
 TEST_CASE("NTTP find_all returns result vector", "[nttp_find]") {
-  auto const all = pcrepp::find_all<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180");
+  auto all_res = pcrepp::find_all<R"((?<key>\w+):(?<value>\d+))">("age:30 height:180");
+  REQUIRE(all_res.has_value());
+  auto const& all = *all_res;
   REQUIRE(std::ranges::distance(all) == 2);
 
-  // 構造化束縛を用いたループ
   int count = 0;
-  for (auto const& [whole, key, value] : all) {
+  for (auto const& mr : all) {
     if (count == 0) {
-      CHECK(whole == "age:30");
-      CHECK(key == "age");
-      CHECK(value == "30");
+      CHECK(mr.get(0) == "age:30");
+      CHECK(mr.get(1) == "age");
+      CHECK(mr.get(2) == "30");
     } else {
-      CHECK(whole == "height:180");
-      CHECK(key == "height");
-      CHECK(value == "180");
+      CHECK(mr.get(0) == "height:180");
+      CHECK(mr.get(1) == "height");
+      CHECK(mr.get(2) == "180");
     }
     count++;
   }
   CHECK(count == 2);
 
-  auto it = all.begin();
+  auto        it = all.begin();
   auto const& r1 = *it;
-  CHECK(std::get<1>(r1) == "age");
-  CHECK(std::get<2>(r1) == "30");
+  CHECK(r1.get(1) == "age");
+  CHECK(r1.get(2) == "30");
 }
 
 TEST_CASE("NTTP find returns unexpected on invalid pattern", "[nttp_find]") {
@@ -72,9 +74,9 @@ TEST_CASE("NTTP find returns unexpected on invalid pattern", "[nttp_find]") {
   CHECK_FALSE(res.has_value());
 }
 
-TEST_CASE("NTTP find_unchecked throws on invalid pattern", "[nttp_find]") {
-  // C7: find_unchecked は throw 版
-  CHECK_THROWS_AS((void)pcrepp::find_unchecked<"(">("x"), std::runtime_error);
+TEST_CASE("NTTP find_unchecked returns unexpected on invalid pattern", "[nttp_find]") {
+  auto const res = pcrepp::find_unchecked<"(">("x");
+  CHECK_FALSE(res.has_value());
 }
 
 TEST_CASE("NTTP find accepts string literal template argument", "[nttp_find]") {
@@ -97,12 +99,13 @@ TEST_CASE("NTTP compile and _re literal", "[nttp_find]") {
     CHECK(key == "age");
     CHECK(value == "30");
 
-    auto all = re.find_all("age:30 height:180");
-    CHECK(std::ranges::distance(all) == 2);
+    auto all_res = re.find_all("age:30 height:180");
+    REQUIRE(all_res.has_value());
+    CHECK(std::ranges::distance(*all_res) == 2);
   }
 
   SECTION("_re literal") {
-    auto re = R"((\w+):(\d+))"_re;
+    auto re  = R"((\w+):(\d+))"_re;
     auto res = re.find("age:30");
     REQUIRE(res);
     auto [m, whole, key, value] = *res;
@@ -112,37 +115,40 @@ TEST_CASE("NTTP compile and _re literal", "[nttp_find]") {
   }
 
   SECTION("_re literal find_all with complex pattern") {
-    auto const all = pcrepp::find_all<R"re(<li class=\"item-card[\\s\\S]*?data-product-id=\"([0-9]+)\"[\\s\\S]*?data-product-price=\"([0-9]+)\"[\\s\\S]*?<div class=\"item-card__title\"><a[\\s\\S]*?href=\"(https://booth\\.pm/ja/items/[0-9]+)\">([\\s\\S]*?)</a>[\\s\\S]*?<div class=\"item-card__shop-name\">([\\s\\S]*?)</div>\000")re">("aaaa");
-    for (auto const& [w, g1, g2, g3, g4, g5] : all) {
-      CHECK(w.empty());
-      CHECK(g1.empty());
-      CHECK(g2.empty());
-      CHECK(g3.empty());
-      CHECK(g4.empty());
-      CHECK(g5.empty());
+    auto all_res = pcrepp::find_all<
+        R"re(<li class=\"item-card[\\s\\S]*?data-product-id=\"([0-9]+)\"[\\s\\S]*?data-product-price=\"([0-9]+)\"[\\s\\S]*?<div class=\"item-card__title\"><a[\\s\\S]*?href=\"(https://booth\\.pm/ja/items/[0-9]+)\">([\\s\\S]*?)</a>[\\s\\S]*?<div class=\"item-card__shop-name\">([\\s\\S]*?)</div>\000")re">(
+        "aaaa");
+    REQUIRE(all_res.has_value());
+    for (auto const& mr : *all_res) {
+      CHECK(mr.get(0).empty());
+      CHECK(mr.get(1).empty());
+      CHECK(mr.get(2).empty());
+      CHECK(mr.get(3).empty());
+      CHECK(mr.get(4).empty());
+      CHECK(mr.get(5).empty());
     }
   }
 }
 
 TEST_CASE("nttp_regex replace with string replacement", "[nttp][f14]") {
-  auto const re = pcrepp::compile<R"(\d+)">();
+  auto const re  = pcrepp::compile<R"(\d+)">();
   auto const res = re.replace("abc 42 def", "X");
   REQUIRE(res);
   CHECK(*res == "abc X def");
 }
 
 TEST_CASE("nttp_regex replace with callback", "[nttp][f14]") {
-  auto const re = pcrepp::compile<R"((\w+))">();
-  auto const res = re.replace("hello world", [](auto const& m) -> std::string {
-    return "[" + std::string{m.get(1)} + "]";
-  });
+  auto const re  = pcrepp::compile<R"((\w+))">();
+  auto const res = re.replace("hello world", [](auto const& m) -> std::string { return "[" + std::string{m.get(1)} + "]"; });
   REQUIRE(res);
   CHECK(*res == "[hello] [world]");
 }
 
 TEST_CASE("nttp_regex split", "[nttp][f14]") {
-  auto const re = pcrepp::compile<R"(,\s*)">();
-  auto const parts = re.split("a, b, c");
+  auto const re       = pcrepp::compile<R"(,\s*)">();
+  auto       parts_res = re.split("a, b, c");
+  REQUIRE(parts_res.has_value());
+  auto const& parts = *parts_res;
   REQUIRE(parts.size() == 3uz);
   CHECK(parts[0] == "a");
   CHECK(parts[1] == "b");
@@ -151,7 +157,8 @@ TEST_CASE("nttp_regex split", "[nttp][f14]") {
 
 TEST_CASE("nttp_match_result formatter", "[nttp][f8]") {
   auto const res = pcrepp::find_unchecked<R"((\w+):(\d+))">("age:30");
-  auto const s = std::format("{}", res);
+  REQUIRE(res.has_value());
+  auto const s = std::format("{}", *res);
   CHECK(s == "[matched, age:30, age, 30]");
 }
 
@@ -161,12 +168,14 @@ TEST_CASE("NTTP API with UseJIT=false", "[nttp_find][h6]") {
   CHECK(res->get<1>() == "42");
 
   auto count = 0uz;
-  for ([[maybe_unused]] auto const& t : pcrepp::find_all<R"(\d+)", false>("1 2 3")) {
+  auto all_res = pcrepp::find_all<R"(\d+)", false>("1 2 3");
+  REQUIRE(all_res.has_value());
+  for ([[maybe_unused]] auto const& t : *all_res) {
     ++count;
   }
   CHECK(count == 3uz);
 
-  auto const re = pcrepp::compile<R"((\d+))", false>();
+  auto const re        = pcrepp::compile<R"((\d+))", false>();
   auto const match_res = re.match("123");
   REQUIRE(match_res);
   CHECK(*match_res);
@@ -192,18 +201,18 @@ TEST_CASE("NTTP free replace non-global", "[nttp_replace]") {
 }
 
 TEST_CASE("NTTP free replace with callback", "[nttp_replace]") {
-  auto const res = pcrepp::replace<R"((\w+):(\d+))">("age:30", [](auto const& m) -> std::string {
-    return "[" + std::string{m.get(1)} + "=" + std::string{m.get(2)} + "]";
-  });
+  auto const res = pcrepp::replace<R"((\w+):(\d+))">("age:30", [](auto const& m) -> std::string { return "[" + std::string{m.get(1)} + "=" + std::string{m.get(2)} + "]"; });
   REQUIRE(res);
   CHECK(*res == "[age=30]");
 }
 
-TEST_CASE("NTTP replace_unchecked throws on invalid pattern", "[nttp_replace]") {
-  CHECK_THROWS_AS(pcrepp::replace_unchecked<R"([)">("abc", "x"), std::runtime_error);
+TEST_CASE("NTTP replace_unchecked returns unexpected on invalid pattern", "[nttp_replace]") {
+  auto const bad = pcrepp::replace_unchecked<R"([)">("abc", "x");
+  CHECK_FALSE(bad.has_value());
 
   auto const s = pcrepp::replace_unchecked<R"(\d+)">("v1 v22", "?");
-  CHECK(s == "v? v?");
+  REQUIRE(s.has_value());
+  CHECK(*s == "v? v?");
 }
 
 TEST_CASE("NTTP free replace returns unexpected on invalid pattern", "[nttp_replace]") {
@@ -279,17 +288,11 @@ TEST_CASE("NTTP fast replace UseJIT=false", "[nttp_replace][fast]") {
 
 TEST_CASE("NTTP replace_unchecked two-template-arg version", "[nttp_replace][fast]") {
   auto const s = pcrepp::replace_unchecked<R"(\d+)", "?">("v1 v22");
-  CHECK(s == "v? v?");
+  REQUIRE(s.has_value());
+  CHECK(*s == "v? v?");
 
-  // テンプレート引数のカンマは Catch2 マクロの引数分割と干渉するため
-  // マクロの外で実行して例外を確認する
-  auto threw = false;
-  try {
-    static_cast<void>(pcrepp::replace_unchecked<"[)", "?">("abc"));
-  } catch (std::runtime_error const&) {
-    threw = true;
-  }
-  CHECK(threw);
+  auto const bad = pcrepp::replace_unchecked<"[)", "?">("abc");
+  CHECK_FALSE(bad.has_value());
 }
 
 TEST_CASE("NTTP free match full-string check", "[nttp_match]") {
@@ -300,7 +303,9 @@ TEST_CASE("NTTP free match full-string check", "[nttp_match]") {
 }
 
 TEST_CASE("NTTP free split", "[nttp_split]") {
-  auto const parts = pcrepp::split<R"(,\s*)">("a, b, c");
+  auto       parts_res = pcrepp::split<R"(,\s*)">("a, b, c");
+  REQUIRE(parts_res.has_value());
+  auto const& parts = *parts_res;
   REQUIRE(parts.size() == 3uz);
   CHECK(parts[0] == "a");
   CHECK(parts[1] == "b");
@@ -309,7 +314,7 @@ TEST_CASE("NTTP free split", "[nttp_split]") {
 
 #if PCREPP_HAS_GENERATOR
 TEST_CASE("NTTP split_view lazy iteration", "[nttp_split]") {
-  auto        count = 0uz;
+  auto             count = 0uz;
   std::string_view last;
   for (auto part : pcrepp::split_view<R"(\s+)">("x y z")) {
     last = part;
@@ -320,21 +325,26 @@ TEST_CASE("NTTP split_view lazy iteration", "[nttp_split]") {
 
   auto const re = pcrepp::compile<R"(-)">();
   count         = 0uz;
-  for ([[maybe_unused]] auto part : re.split_view("1-2-3")) { ++count; }
+  for ([[maybe_unused]] auto part : re.split_view("1-2-3")) {
+    ++count;
+  }
   CHECK(count == 3uz);
 }
 #endif
 
 TEST_CASE("NTTP find_all with start offset", "[nttp_find][h19]") {
-  auto const all = pcrepp::find_all<R"(\d+)">("1 2 3 4", 0, 4uz);
+  auto all_res = pcrepp::find_all<R"(\d+)">("1 2 3 4", 0, 4uz);
+  REQUIRE(all_res.has_value());
+  auto const& all = *all_res;
   auto       n   = 0uz;
-  for (auto const& [whole] : all) {
-    CHECK((whole == "3" || whole == "4"));
+  for (auto const& mr : all) {
+    CHECK((mr.get(0) == "3" || mr.get(0) == "4"));
     ++n;
   }
   CHECK(n == 2uz);
 
-  auto const re  = pcrepp::compile<R"([a-z]+)">();
-  auto const all2 = re.find_all("aa bb cc", 0, 3uz);
-  CHECK(std::ranges::distance(all2) == 2uz);
+  auto const re   = pcrepp::compile<R"([a-z]+)">();
+  auto all2_res = re.find_all("aa bb cc", 0, 3uz);
+  REQUIRE(all2_res.has_value());
+  CHECK(std::ranges::distance(*all2_res) == 2uz);
 }

@@ -143,10 +143,12 @@ auto try_make_context(char const* pattern)
     auto const& text = get_text(state.range(0));                              \
     for (auto _ : state) {                                                    \
       auto count = 0uz;                                                       \
-      for ([[maybe_unused]] auto const& tup :                                 \
-           pcrepp::find_all<pattern_str>(text)) {                             \
-        ++count;                                                              \
-      }                                                                       \
+      auto all_res = pcrepp::find_all<pattern_str>(text);                     \
+      if (all_res) {                                                          \
+        for ([[maybe_unused]] auto const& mr : *all_res) {                    \
+          ++count;                                                              \
+        }                                                                       \
+      }                                                                         \
       benchmark::DoNotOptimize(count);                                        \
     }                                                                         \
     state.SetBytesProcessed(state.iterations() * state.range(0));             \

@@ -8,10 +8,11 @@ TEST_CASE("NTTP find_all caching and compile API", "[nttp]") {
     std::cout << "Starting NTTP find_all caching test" << std::endl;
 
     SECTION("Direct find_all call") {
-        auto results = find_all<"abc">("abc abc abc");
+        auto results_res = find_all<"abc">("abc abc abc");
+        REQUIRE(results_res.has_value());
         int count = 0;
-        for (auto [g0] : results) {
-            CHECK(g0 == "abc");
+        for (auto const& mr : *results_res) {
+            CHECK(mr.get(0) == "abc");
             count++;
         }
         CHECK(count == 3);
@@ -20,21 +21,25 @@ TEST_CASE("NTTP find_all caching and compile API", "[nttp]") {
     SECTION("Using compile and nttp_regex object") {
         static constexpr auto re = compile<"(\\w+)">();
         auto target = std::string_view{"hello world"};
-        auto results = re.find_all(target);
+        auto results_res = re.find_all(target);
 
-        REQUIRE(std::ranges::distance(results) == 2);
+        REQUIRE(results_res.has_value());
+        REQUIRE(std::ranges::distance(*results_res) == 2);
 
-        auto [g1_0, g1_1] = *results.begin();
-        CHECK(g1_0 == "hello");
-        CHECK(g1_1 == "hello");
+        auto it = results_res->begin();
+        auto r1 = *it;
+        CHECK(r1.get(0) == "hello");
+        CHECK(r1.get(1) == "hello");
     }
 
     SECTION("Using literal operator _re") {
         auto re = "(\\d+)"_re;
-        auto results = re.find_all("123 456");
-        REQUIRE(std::ranges::distance(results) == 2);
-        auto [g0, g1] = *results.begin();
-        CHECK(g0 == "123");
-        CHECK(g1 == "123");
+        auto results_res = re.find_all("123 456");
+        REQUIRE(results_res.has_value());
+        REQUIRE(std::ranges::distance(*results_res) == 2);
+        auto it = results_res->begin();
+        auto r1 = *it;
+        CHECK(r1.get(0) == "123");
+        CHECK(r1.get(1) == "123");
     }
 }

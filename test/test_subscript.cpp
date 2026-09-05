@@ -32,14 +32,14 @@ static_assert(has_index_get<std::int64_t>);
 static_assert(has_index_get<std::uint64_t>);
 static_assert(has_named_get<std::string_view>);
 static_assert(not has_index_get<unsupported_type>);
-}
+}  // namespace
 
 TEST_CASE("match_result subscript operator", "[match_result]") {
-  pcrepp::context ctx{"(\\w+):(\\d+)"};
+  pcrepp::context      ctx{"(\\w+):(\\d+)"};
   pcrepp::match_result mr{ctx};
 
   std::string_view target = "age:30";
-  auto const rc = ctx.find(target, mr);
+  auto const       rc     = ctx.find(target, mr);
   REQUIRE(rc);
   REQUIRE(*rc > 0);
 
@@ -53,6 +53,7 @@ TEST_CASE("match_result subscript operator", "[match_result]") {
     CHECK(mr[0] == "age:30");
     CHECK(mr[1] == "age");
     CHECK(mr[2] == "30");
+    CHECK(mr[-1] == "");
   }
 
   SECTION("get returns string_view by default") {
@@ -71,11 +72,11 @@ TEST_CASE("match_result subscript operator", "[match_result]") {
 }
 
 TEST_CASE("match_result named subscript operator", "[match_result]") {
-  pcrepp::context ctx{"(?<key>\\w+):(?<value>[+-]?(?:\\d+\\.\\d+|\\d+))"};
+  pcrepp::context      ctx{"(?<key>\\w+):(?<value>[+-]?(?:\\d+\\.\\d+|\\d+))"};
   pcrepp::match_result mr{ctx};
 
   std::string_view target = "height:180.5";
-  auto const rc = ctx.find(target, mr);
+  auto const       rc     = ctx.find(target, mr);
   REQUIRE(rc);
   REQUIRE(*rc > 0);
 
@@ -98,11 +99,11 @@ TEST_CASE("match_result named subscript operator", "[match_result]") {
 }
 
 TEST_CASE("match_result get returns default value on conversion failure", "[match_result]") {
-  pcrepp::context ctx{"(?<value>[^:]+)"};
+  pcrepp::context      ctx{"(?<value>[^:]+)"};
   pcrepp::match_result mr{ctx};
 
   std::string_view target = "abc";
-  auto const rc = ctx.find(target, mr);
+  auto const       rc     = ctx.find(target, mr);
   REQUIRE(rc);
   REQUIRE(*rc > 0);
 
@@ -115,11 +116,11 @@ TEST_CASE("match_result get returns default value on conversion failure", "[matc
 }
 
 TEST_CASE("match_result get requires full numeric parse", "[match_result]") {
-  pcrepp::context ctx{"(?<value>[^:]+)"};
+  pcrepp::context      ctx{"(?<value>[^:]+)"};
   pcrepp::match_result mr{ctx};
 
   std::string_view target = "123abc";
-  auto const rc = ctx.find(target, mr);
+  auto const       rc     = ctx.find(target, mr);
   REQUIRE(rc);
   REQUIRE(*rc > 0);
 
@@ -128,11 +129,11 @@ TEST_CASE("match_result get requires full numeric parse", "[match_result]") {
 }
 
 TEST_CASE("match_result get returns default for out-of-range integers", "[match_result]") {
-  pcrepp::context ctx{"(?<value>[^:]+)"};
+  pcrepp::context      ctx{"(?<value>[^:]+)"};
   pcrepp::match_result mr{ctx};
 
   std::string_view target = "999999999999999999999999";
-  auto const rc = ctx.find(target, mr);
+  auto const       rc     = ctx.find(target, mr);
   REQUIRE(rc);
   REQUIRE(*rc > 0);
 
@@ -144,16 +145,16 @@ TEST_CASE("match_result named get works with non-null-terminated string_view", "
   // 名前の直後に 'X' を配置し、string_view を名前部分だけ取ったときに
   // 旧実装だと 'valueX' まで読み込んでいた可能性がある。
   // 新実装では NUL 終端バッファにコピーしてから PCRE2 に渡すため安全。
-  pcrepp::context ctx{"(?<value>[^:]+)"};
+  pcrepp::context      ctx{"(?<value>[^:]+)"};
   pcrepp::match_result mr{ctx};
 
   std::string_view target = "abc";
-  auto const rc = ctx.find(target, mr);
+  auto const       rc     = ctx.find(target, mr);
   REQUIRE(rc);
   REQUIRE(*rc > 0);
 
   // value 文字列を名前に持つバッファ + 直後に非 NUL 文字
-  std::string buf = "valueXYZ";
+  std::string      buf = "valueXYZ";
   std::string_view name{buf.data(), 5uz};  // "value" (NUL 終端なし)
 
   CHECK(mr.get<int>(name) == 0);
@@ -163,11 +164,11 @@ TEST_CASE("match_result named get works with non-null-terminated string_view", "
 
 TEST_CASE("match_result named get works with long names (heap buffer path)", "[match_result][nul_safety]") {
   // 256 バイト超の名前でヒープ経路もカバー
-  pcrepp::context ctx{"(?<longname>[^:]+)"};
+  pcrepp::context      ctx{"(?<longname>[^:]+)"};
   pcrepp::match_result mr{ctx};
 
   std::string_view target = "x";
-  auto const rc = ctx.find(target, mr);
+  auto const       rc     = ctx.find(target, mr);
   REQUIRE(rc);
   REQUIRE(*rc > 0);
 
@@ -190,11 +191,11 @@ TEST_CASE("match_result named get works with long names (heap buffer path)", "[m
 }
 
 TEST_CASE("match_result try_get distinguishes success and failure", "[match_result][try_get]") {
-  pcrepp::context ctx{"(?<i>\\d+),(?<f>[+-]?\\d+\\.\\d+)"};
+  pcrepp::context      ctx{"(?<i>\\d+),(?<f>[+-]?\\d+\\.\\d+)"};
   pcrepp::match_result mr{ctx};
 
   std::string_view target = "42,3.14";
-  auto const rc = ctx.find(target, mr);
+  auto const       rc     = ctx.find(target, mr);
   REQUIRE(rc);
   REQUIRE(*rc > 0);
 
@@ -223,13 +224,13 @@ TEST_CASE("match_result try_get distinguishes success and failure", "[match_resu
 }
 
 TEST_CASE("match_result try_get reports conversion failure for non-numeric content", "[match_result][try_get]") {
-  pcrepp::context ctx{"(?<v>[^:]+)"};
+  pcrepp::context      ctx{"(?<v>[^:]+)"};
   pcrepp::match_result mr{ctx};
 
   // 数値として解釈できない文字列
   {
     std::string_view target = "abc";
-    auto const rc = ctx.find(target, mr);
+    auto const       rc     = ctx.find(target, mr);
     REQUIRE(rc);
     REQUIRE(*rc > 0);
 
@@ -240,7 +241,7 @@ TEST_CASE("match_result try_get reports conversion failure for non-numeric conte
   // 範囲外整数
   {
     std::string_view target = "99999999999999999999999";
-    auto const rc = ctx.find(target, mr);
+    auto const       rc     = ctx.find(target, mr);
     REQUIRE(rc);
     REQUIRE(*rc > 0);
     CHECK(not mr.try_get<int>("v").has_value());
@@ -249,7 +250,7 @@ TEST_CASE("match_result try_get reports conversion failure for non-numeric conte
   // 全桁消費できない ("123abc" のようなケース)
   {
     std::string_view target = "123abc";
-    auto const rc = ctx.find(target, mr);
+    auto const       rc     = ctx.find(target, mr);
     REQUIRE(rc);
     REQUIRE(*rc > 0);
     CHECK(not mr.try_get<int>("v").has_value());
@@ -258,7 +259,7 @@ TEST_CASE("match_result try_get reports conversion failure for non-numeric conte
   // 成功ケース
   {
     std::string_view target = "42";
-    auto const rc = ctx.find(target, mr);
+    auto const       rc     = ctx.find(target, mr);
     REQUIRE(rc);
     REQUIRE(*rc > 0);
     auto v = mr.try_get<int>("v");

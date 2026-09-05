@@ -62,8 +62,16 @@ int main() {
   auto nttp = pcrepp::find<R"(\d+)">(target);
   fails += check(static_cast<bool>(nttp) && nttp->get<1>() == "123", "nttp find");
 
+  auto fu = pcrepp::find_unchecked<R"(\d+)">(target);
+  fails += check(static_cast<bool>(fu) && fu->get<1>() == "123", "nttp find_unchecked");
+
   auto nr = pcrepp::replace<R"(\d+)">(target, "#");
   fails += check(static_cast<bool>(nr), "nttp replace");
+
+  auto ru = pcrepp::replace_unchecked<R"(\d+)">(target, "#");
+  fails += check(static_cast<bool>(ru), "nttp replace_unchecked");
+
+  fails += check(fr->operator[](-1).empty(), "mr[-1] empty");
 
   if (fails == 0) {
     std::printf("SMOKE_WASI_MINIMAL_OK\n");

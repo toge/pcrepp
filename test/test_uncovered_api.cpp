@@ -8,7 +8,7 @@
 #if PCREPP_HAS_GENERATOR
 TEST_CASE("split_view yields same tokens as split", "[split_view]") {
   using namespace std::string_view_literals;
-  auto const ctx = pcrepp::context<>::create(R"(,\s*)").value();
+  auto const ctx    = pcrepp::context<>::create(R"(,\s*)").value();
   auto const target = "apple, banana, cherry"sv;
 
   auto tokens = std::vector<std::string_view>{};
@@ -23,8 +23,8 @@ TEST_CASE("split_view yields same tokens as split", "[split_view]") {
 
 TEST_CASE("split_view with no delimiter yields whole target", "[split_view]") {
   using namespace std::string_view_literals;
-  auto const ctx = pcrepp::context<>::create(",").value();
-  auto tokens = std::vector<std::string_view>{};
+  auto const ctx    = pcrepp::context<>::create(",").value();
+  auto       tokens = std::vector<std::string_view>{};
   for (auto const token : ctx.split_view("solo"sv)) {
     tokens.push_back(token);
   }
@@ -34,8 +34,8 @@ TEST_CASE("split_view with no delimiter yields whole target", "[split_view]") {
 
 TEST_CASE("split_view keeps empty tokens between adjacent delimiters", "[split_view]") {
   using namespace std::string_view_literals;
-  auto const ctx = pcrepp::context<>::create(",").value();
-  auto tokens = std::vector<std::string_view>{};
+  auto const ctx    = pcrepp::context<>::create(",").value();
+  auto       tokens = std::vector<std::string_view>{};
   for (auto const token : ctx.split_view("a,,b,"sv)) {
     tokens.push_back(token);
   }
@@ -47,13 +47,12 @@ TEST_CASE("split_view keeps empty tokens between adjacent delimiters", "[split_v
 }
 #endif
 
-// replace_unchecked — throw 版置換
+// replace_unchecked — expected 版置換
 TEST_CASE("replace_unchecked substitutes via callback", "[replace_unchecked]") {
-  auto const ctx = pcrepp::context<>::create(R"((\d+))").value();
-  auto const result = ctx.replace_unchecked("a1 b22 c333", [](auto const& mr) {
-    return std::format("<{}>", std::string{mr.get(1uz)}.size());
-  });
-  CHECK(result == "a<1> b<2> c<3>");
+  auto const ctx    = pcrepp::context<>::create(R"((\d+))").value();
+  auto const result = ctx.replace_unchecked("a1 b22 c333", [](auto const& mr) { return std::format("<{}>", std::string{mr.get(1uz)}.size()); });
+  REQUIRE(result.has_value());
+  CHECK(*result == "a<1> b<2> c<3>");
 }
 
 // _re リテラル演算子

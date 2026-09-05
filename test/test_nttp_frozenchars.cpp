@@ -24,11 +24,14 @@ TEST_CASE("nttp find_all works with transformed FrozenString pattern", "[nttp][f
          | frozenchars::ops::join_lines;
 
   auto hits = std::vector<std::string>{};
-  for (auto const& [whole, digits] : pcrepp::find_all<kRaw>("a1 bb22 ccc333")) {
+  auto all_res = pcrepp::find_all<kRaw>("a1 bb22 ccc333");
+  REQUIRE(all_res.has_value());
+  for (auto const& mr : *all_res) {
+    auto const whole = mr.get(0);
     if (whole.empty()) {
       continue;
     }
-    hits.emplace_back(digits);
+    hits.emplace_back(std::string{mr.get(1)});
   }
 
   REQUIRE(hits.size() == 3);

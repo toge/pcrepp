@@ -33,11 +33,15 @@ TEST_CASE("context_create_utf auto-encodes UTF for non-ASCII patterns", "[utf][e
 
 TEST_CASE("compile_utf returns context with PCRE2_UTF for non-ASCII patterns", "[utf][e9]") {
   // ASCII パターン → UTF 不要
-  auto const& ascii_ctx = pcrepp::compile_utf<R"((\w+):(\d+))">();
+  auto ascii_res = pcrepp::compile_utf<R"((\w+):(\d+))">();
+  REQUIRE(ascii_res.has_value());
+  auto const& ascii_ctx = **ascii_res;
   CHECK((ascii_ctx.options() & PCRE2_UTF) == 0u);
 
   // 非 ASCII パターン → PCRE2_UTF 自動付与
-  auto const& jp_ctx = pcrepp::compile_utf<R"((\d+)円)">();
+  auto jp_res = pcrepp::compile_utf<R"((\d+)円)">();
+  REQUIRE(jp_res.has_value());
+  auto const& jp_ctx = **jp_res;
   CHECK((jp_ctx.options() & PCRE2_UTF) != 0u);
 
   // 動作確認: 日本語ターゲットで (\d+)円 がマッチ

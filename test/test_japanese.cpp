@@ -149,17 +149,19 @@ TEST_CASE("NTTP find matches literal Japanese substring", "[japanese][nttp_find]
 }
 
 TEST_CASE("NTTP find_all extracts ASCII digits from Japanese text", "[japanese][nttp_find]") {
-  auto const all = pcrepp::find_all<R"((\d+)個)">("りんご 3個, みかん 5個");
+  auto all_res = pcrepp::find_all<R"((\d+)個)">("りんご 3個, みかん 5個");
+  REQUIRE(all_res.has_value());
+  auto const& all = *all_res;
   CHECK(std::ranges::distance(all) == 2);
 
   int count = 0;
-  for (auto const& [whole, num] : all) {
+  for (auto const& mr : all) {
     if (count == 0) {
-      CHECK(whole == "3個");
-      CHECK(num == "3");
+      CHECK(mr.get(0) == "3個");
+      CHECK(mr.get(1) == "3");
     } else {
-      CHECK(whole == "5個");
-      CHECK(num == "5");
+      CHECK(mr.get(0) == "5個");
+      CHECK(mr.get(1) == "5");
     }
     ++count;
   }

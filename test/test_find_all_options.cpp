@@ -50,15 +50,17 @@ TEST_CASE("context::find_all with options", "[find_all][options]") {
 TEST_CASE("nttp_regex::find_all with options", "[nttp][find_all][options]") {
     using namespace pcrepp;
     static constexpr auto re = "^abc"_re;
-    
+
     SECTION("Without options") {
-        auto matches = re.find_all("abc");
-        CHECK(matches.begin() != matches.end());
+        auto matches_res = re.find_all("abc");
+        REQUIRE(matches_res.has_value());
+        CHECK(std::ranges::distance(*matches_res) > 0uz);
     }
 
     SECTION("With PCRE2_NOTBOL") {
-        auto matches = re.find_all("abc", PCRE2_NOTBOL);
-        CHECK(matches.begin() == matches.end());
+        auto matches_res = re.find_all("abc", PCRE2_NOTBOL);
+        REQUIRE(matches_res.has_value());
+        CHECK(std::ranges::distance(*matches_res) == 0uz);
     }
 }
 
@@ -67,23 +69,27 @@ TEST_CASE("find_all_frozen with options", "[frozenchars][find_all][options]") {
     using namespace pcrepp;
     using namespace frozenchars::literals;
     static constexpr auto pattern = "^abc"_fs;
-    
+
     SECTION("Without options") {
-        auto matches = find_all_frozen<pattern>("abc");
-        CHECK(matches.begin() != matches.end());
+        auto matches_res = find_all_frozen<pattern>("abc");
+        REQUIRE(matches_res.has_value());
+        CHECK(std::ranges::distance(*matches_res) > 0uz);
     }
 
     SECTION("With PCRE2_NOTBOL") {
-        auto matches = find_all_frozen<pattern>("abc", PCRE2_NOTBOL);
-        CHECK(matches.begin() == matches.end());
+        auto matches_res = find_all_frozen<pattern>("abc", PCRE2_NOTBOL);
+        REQUIRE(matches_res.has_value());
+        CHECK(std::ranges::distance(*matches_res) == 0uz);
     }
 }
 #endif
 
 TEST_CASE("NTTP find_all with options", "[nttp][find_all][options]") {
     using namespace pcrepp;
-    auto results = pcrepp::find_all<"^abc">("abc", PCRE2_NOTBOL);
-    CHECK(results.begin() == results.end());
+    auto results_res = pcrepp::find_all<"^abc">("abc", PCRE2_NOTBOL);
+    REQUIRE(results_res.has_value());
+    auto const& results = *results_res;
+    CHECK(std::ranges::distance(results) == 0uz);
 }
 
 TEST_CASE("option set covers multiline dotall extended noteol", "[options][h4]") {
