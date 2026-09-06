@@ -48,8 +48,8 @@ jobs:
         run: |
           if [ ! -d ~/vcpkg ]; then
             git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
-            ~/vcpkg/bootstrap-vcpkg.sh
           fi
+          cd ~/vcpkg && git pull && ./bootstrap-vcpkg.sh
 
       - name: Configure
         run: |
@@ -88,8 +88,8 @@ jobs:
         run: |
           if [ ! -d ~/vcpkg ]; then
             git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
-            ~/vcpkg/bootstrap-vcpkg.sh
           fi
+          cd ~/vcpkg && git pull && ./bootstrap-vcpkg.sh
 
       - name: Configure
         run: |
@@ -123,8 +123,8 @@ jobs:
         run: |
           if not exist C:\vcpkg (
             git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-            call C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
           )
+          cd C:\vcpkg && git pull && call bootstrap-vcpkg.bat -disableMetrics
         shell: cmd
 
       - name: Configure
@@ -173,8 +173,8 @@ jobs:
         run: |
           if [ ! -d ~/vcpkg ]; then
             git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
-            ~/vcpkg/bootstrap-vcpkg.sh
           fi
+          cd ~/vcpkg && git pull && ./bootstrap-vcpkg.sh
 
       - name: Configure
         run: |
@@ -215,8 +215,8 @@ jobs:
         run: |
           if [ ! -d ~/vcpkg ]; then
             git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
-            ~/vcpkg/bootstrap-vcpkg.sh
           fi
+          cd ~/vcpkg && git pull && ./bootstrap-vcpkg.sh
 
       - name: Configure
         run: cmake -B build -S . -G Ninja -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake
@@ -253,8 +253,8 @@ jobs:
         run: |
           if [ ! -d ~/vcpkg ]; then
             git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
-            ~/vcpkg/bootstrap-vcpkg.sh
           fi
+          cd ~/vcpkg && git pull && ./bootstrap-vcpkg.sh
 
       - name: Configure
         run: |
