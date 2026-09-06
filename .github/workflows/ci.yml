@@ -49,7 +49,7 @@ jobs:
           if [ ! -d ~/vcpkg ]; then
             git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
           fi
-          cd ~/vcpkg && git pull && ./bootstrap-vcpkg.sh
+          cd ~/vcpkg && git fetch --unshallow 2>/dev/null; git pull && ./bootstrap-vcpkg.sh
 
       - name: Configure
         run: |
@@ -89,7 +89,7 @@ jobs:
           if [ ! -d ~/vcpkg ]; then
             git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
           fi
-          cd ~/vcpkg && git pull && ./bootstrap-vcpkg.sh
+          cd ~/vcpkg && git fetch --unshallow 2>/dev/null; git pull && ./bootstrap-vcpkg.sh
 
       - name: Configure
         run: |
@@ -124,7 +124,7 @@ jobs:
           if not exist C:\vcpkg (
             git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
           )
-          cd C:\vcpkg && git pull && call bootstrap-vcpkg.bat -disableMetrics
+          cd C:\vcpkg && git fetch --unshallow 2>nul & git pull & call bootstrap-vcpkg.bat -disableMetrics
         shell: cmd
 
       - name: Configure
@@ -174,7 +174,7 @@ jobs:
           if [ ! -d ~/vcpkg ]; then
             git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
           fi
-          cd ~/vcpkg && git pull && ./bootstrap-vcpkg.sh
+          cd ~/vcpkg && git fetch --unshallow 2>/dev/null; git pull && ./bootstrap-vcpkg.sh
 
       - name: Configure
         run: |
@@ -216,7 +216,7 @@ jobs:
           if [ ! -d ~/vcpkg ]; then
             git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
           fi
-          cd ~/vcpkg && git pull && ./bootstrap-vcpkg.sh
+          cd ~/vcpkg && git fetch --unshallow 2>/dev/null; git pull && ./bootstrap-vcpkg.sh
 
       - name: Configure
         run: cmake -B build -S . -G Ninja -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake
@@ -254,7 +254,7 @@ jobs:
           if [ ! -d ~/vcpkg ]; then
             git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
           fi
-          cd ~/vcpkg && git pull && ./bootstrap-vcpkg.sh
+          cd ~/vcpkg && git fetch --unshallow 2>/dev/null; git pull && ./bootstrap-vcpkg.sh
 
       - name: Configure
         run: |
