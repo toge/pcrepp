@@ -115,16 +115,16 @@ jobs:
           path: |
             C:\vcpkg
             build\vcpkg_installed
-          key: ${{ runner.os }}-msvc-vcpkg-${{ hashFiles('vcpkg.json') }}
+          key: ${{ runner.os }}-msvc-vcpkg-2-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
-            ${{ runner.os }}-msvc-vcpkg-
+            ${{ runner.os }}-msvc-vcpkg-2-
 
       - name: Setup vcpkg
         run: |
           if not exist C:\vcpkg (
             git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
           )
-          cd C:\vcpkg & (git fetch --unshallow 2>nul || ver>nul) & git pull & call bootstrap-vcpkg.bat -disableMetrics
+          cd C:\vcpkg & git pull & call bootstrap-vcpkg.bat -disableMetrics
         shell: cmd
 
       - name: Configure
