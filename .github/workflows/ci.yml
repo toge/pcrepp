@@ -115,16 +115,16 @@ jobs:
           path: |
             C:\vcpkg
             build\vcpkg_installed
-          key: ${{ runner.os }}-msvc-vcpkg-3-${{ hashFiles('vcpkg.json') }}
+          key: ${{ runner.os }}-msvc-vcpkg-4-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
-            ${{ runner.os }}-msvc-vcpkg-3-
+            ${{ runner.os }}-msvc-vcpkg-4-
 
+      # プリインストールの C:\vcpkg は baseline を含まない壊れた履歴のため使わず、毎回 fresh clone する
       - name: Setup vcpkg
         run: |
-          if not exist C:\vcpkg (
-            git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-          )
-          cd C:\vcpkg & git fetch --unshallow & git pull & call bootstrap-vcpkg.bat -disableMetrics
+          if exist C:\vcpkg rmdir /s /q C:\vcpkg
+          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          cd C:\vcpkg & call bootstrap-vcpkg.bat -disableMetrics
         shell: cmd
 
       - name: Configure
