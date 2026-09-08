@@ -284,11 +284,12 @@ jobs:
 
       - name: Install wasi-sdk
         run: |
-          WASI_SDK_VERSION=24
-          WASI_SDK_URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-linux.tar.gz"
-          curl -L -o /tmp/wasi-sdk.tar.gz "$WASI_SDK_URL"
-          tar xf /tmp/wasi-sdk.tar.gz -C /opt
-          mv /opt/wasi-sdk-* /opt/wasi-sdk
+          WASI_SDK_VERSION=34
+          WASI_SDK_URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz"
+          curl -fsSL --retry 3 -o /tmp/wasi-sdk.tar.gz "$WASI_SDK_URL"
+          sudo tar xf /tmp/wasi-sdk.tar.gz -C /opt
+          sudo rm -rf /opt/wasi-sdk
+          sudo mv /opt/wasi-sdk-* /opt/wasi-sdk
 
       - name: Restore vcpkg cache
         uses: actions/cache@v4
@@ -321,9 +322,9 @@ jobs:
 
       - name: Test
         run: |
-          WASMTIME_VERSION=$(curl -s https://github.com/bytecodealliance/wasmtime/releases/latest | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-          curl -L -o /tmp/wasmtime.tar.xz "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz"
-          tar xf /tmp/wasmtime.tar.xz -C /opt
+          WASMTIME_VERSION=$(curl -fsSL --retry 3 https://github.com/bytecodealliance/wasmtime/releases/latest | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          curl -fsSL --retry 3 -o /tmp/wasmtime.tar.xz "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          sudo tar xf /tmp/wasmtime.tar.xz -C /opt
           export PATH="/opt/wasmtime-v${WASMTIME_VERSION}-x86_64-linux:$PATH"
           ctest --test-dir build -V
 
@@ -335,11 +336,12 @@ jobs:
 
       - name: Install wasi-sdk
         run: |
-          WASI_SDK_VERSION=24
-          WASI_SDK_URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-linux.tar.gz"
-          curl -L -o /tmp/wasi-sdk.tar.gz "$WASI_SDK_URL"
-          tar xf /tmp/wasi-sdk.tar.gz -C /opt
-          mv /opt/wasi-sdk-* /opt/wasi-sdk
+          WASI_SDK_VERSION=34
+          WASI_SDK_URL="https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz"
+          curl -fsSL --retry 3 -o /tmp/wasi-sdk.tar.gz "$WASI_SDK_URL"
+          sudo tar xf /tmp/wasi-sdk.tar.gz -C /opt
+          sudo rm -rf /opt/wasi-sdk
+          sudo mv /opt/wasi-sdk-* /opt/wasi-sdk
 
       - name: Restore vcpkg cache
         uses: actions/cache@v4
@@ -372,8 +374,8 @@ jobs:
 
       - name: Test
         run: |
-          WASMTIME_VERSION=$(curl -s https://github.com/bytecodealliance/wasmtime/releases/latest | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-          curl -L -o /tmp/wasmtime.tar.xz "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz"
-          tar xf /tmp/wasmtime.tar.xz -C /opt
+          WASMTIME_VERSION=$(curl -fsSL --retry 3 https://github.com/bytecodealliance/wasmtime/releases/latest | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          curl -fsSL --retry 3 -o /tmp/wasmtime.tar.xz "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          sudo tar xf /tmp/wasmtime.tar.xz -C /opt
           export PATH="/opt/wasmtime-v${WASMTIME_VERSION}-x86_64-linux:$PATH"
           ctest --test-dir build -V
