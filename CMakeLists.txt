@@ -10,7 +10,9 @@ set(PCREPP_OPTIMIZATION_FLAG_REGEX "(^|[ \t])-O[^ \t]+")
 set(PCREPP_CPU_TUNING_FLAG_REGEX "(^|[ \t])-(march|mcpu|mtune)=[^ \t]+")
 
 macro(pcrepp_configure_default_native_flags language)
-    if(NOT EMSCRIPTEN)
+    # Emscripten / WASI はクロスターゲットのため、ホスト向けの
+    # -O3 / -march=native 付与を行わない (wasm ターゲットでは不正オプションになる)。
+    if(NOT EMSCRIPTEN AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
         set(_flags_var "CMAKE_${language}_FLAGS")
         if(${_flags_var} MATCHES "${PCREPP_OPTIMIZATION_FLAG_REGEX}")
             foreach(_config RELEASE RELWITHDEBINFO MINSIZEREL)

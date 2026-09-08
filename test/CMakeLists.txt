@@ -1,3 +1,10 @@
+# WASI ターゲットは wasm を直接実行できないため、wasmtime 経由で実行する。
+# (CMAKE_CROSSCOMPILING_EMULATOR は add_executable より前に設定する必要がある。
+#  wasmtime 自体はテスト実行時に PATH 上にあればよく、configure 時には不要)
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+  set(CMAKE_CROSSCOMPILING_EMULATOR wasmtime)
+endif()
+
 # 例外なしビルドのスモークテスト (wasip1 CI 向け。Catch2 不要)
 add_executable(smoke_wasi_minimal smoke_wasi_minimal.cpp)
 target_link_libraries(smoke_wasi_minimal PRIVATE pcrepp)

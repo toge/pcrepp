@@ -314,6 +314,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake \
             -DVCPKG_TARGET_TRIPLET=wasm32-wasip1 \
             -DVCPKG_OVERLAY_TRIPLETS=$PWD/triplets \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/opt/wasi-sdk/share/cmake/wasi-sdk-p1.cmake \
             -DCMAKE_CXX_FLAGS="-O3 -msimd128 -fno-exceptions" \
             -DCMAKE_C_FLAGS="-O3 -msimd128"
 
@@ -366,6 +367,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake \
             -DVCPKG_TARGET_TRIPLET=wasm32-wasip2 \
             -DVCPKG_OVERLAY_TRIPLETS=$PWD/triplets \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/opt/wasi-sdk/share/cmake/wasi-sdk-p2.cmake \
             -DCMAKE_CXX_FLAGS="-O3 -msimd128 -fno-exceptions" \
             -DCMAKE_C_FLAGS="-O3 -msimd128"
 

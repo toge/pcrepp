@@ -1,7 +1,10 @@
 {
   "name": "pcrepp",
   "dependencies": [
-    "benchmark",
+    {
+      "name": "benchmark",
+      "platform": "emscripten | !wasm32"
+    },
     {
       "name": "catch2",
       "platform": "emscripten | !wasm32"
