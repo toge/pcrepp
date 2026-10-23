@@ -15,6 +15,7 @@
     "glaze",
     {
       "name": "pcre2",
+      "version>=": "10.49",
       "default-features": false,
       "features": [
         {

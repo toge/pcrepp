@@ -56,6 +56,18 @@
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include "pcre2.h"
 
+// Security: pcrepp requires PCRE2 >= 10.49.
+// Older releases are affected by multiple CVEs reachable when compiling
+// attacker-controlled patterns, including JIT code-generation flaws
+// (CVE-2026-103111) and integer overflows in the compiler (CVE-2026-89158,
+// CVE-2026-89156). pcrepp uses pcre2_jit_compile by default, so the JIT
+// flaws apply directly. See Ruby's analogous Onigmo CVEs (CVE-2026-89078,
+// CVE-2026-93577, CVE-2026-97229, CVE-2026-110264) for the same class.
+#if !defined(PCRE2_MAJOR) || !defined(PCRE2_MINOR) || \
+    (PCRE2_MAJOR < 10) || (PCRE2_MAJOR == 10 && PCRE2_MINOR < 49)
+#error "pcrepp requires PCRE2 >= 10.49 (security fixes). Upgrade your PCRE2 installation."
+#endif
+
 namespace pcrepp {
 
 /**
