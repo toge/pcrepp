@@ -4,6 +4,9 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace {
 void check_empty_match_result(pcrepp::match_result const& result) {
@@ -375,4 +378,242 @@ TEST_CASE("review: substitute overflow retry preserves match options", "[review]
   REQUIRE(nojit_replacement);
   CHECK(*jit_replacement == expected);
   CHECK(*nojit_replacement == expected);
+}
+
+TEST_CASE("review: global replacement uses PCRE2 continuation semantics", "[review][iteration]") {
+  auto const ctx      = pcrepp::context<>::create(R"(|a)").value();
+  auto       seen     = std::vector<std::pair<size_t, size_t>>{};
+  auto const callback = ctx.replace("a", [&](pcrepp::match_result const& result) {
+    seen.emplace_back(result.start_pos(), result.end_pos());
+    return "X";
+  });
+  auto const native   = ctx.replace("a", "X");
+  auto const fast     = pcrepp::replace<R"(|a)", "X">("a");
+  auto const legacy   = pcrepp::replace<R"(|a)">("a", "X");
+
+  REQUIRE(callback);
+  REQUIRE(native);
+  REQUIRE(fast);
+  REQUIRE(legacy);
+  CHECK(*callback == "XXX");
+  CHECK(*native == "XXX");
+  CHECK(*fast == "XXX");
+  CHECK(*legacy == "XXX");
+  auto const expected = std::vector{std::pair{0uz, 0uz}, std::pair{0uz, 1uz}, std::pair{1uz, 1uz}};
+  CHECK(seen == expected);
+}
+
+TEST_CASE("review: range iteration keeps application and continuation options", "[review][iteration]") {
+  auto const zero_width = pcrepp::context<>::create(R"(|a)").value();
+  auto       range      = zero_width.find_all("a");
+  auto       positions  = std::vector<std::pair<size_t, size_t>>{};
+  for (auto const& result : range) {
+    positions.emplace_back(result.start_pos(), result.end_pos());
+  }
+  auto const expected = std::vector{std::pair{0uz, 0uz}, std::pair{0uz, 1uz}, std::pair{1uz, 1uz}};
+  CHECK(positions == expected);
+  CHECK(range.error().empty());
+
+  auto same_offset_before = range.begin();
+  auto same_offset_after  = same_offset_before;
+  ++same_offset_after;
+  CHECK(same_offset_before != same_offset_after);
+
+  auto const noteol       = pcrepp::context<>::create(R"(a|$)").value();
+  auto       noteol_range = noteol.find_all("ab", PCRE2_NOTEOL);
+  auto       matches      = std::vector<std::pair<size_t, size_t>>{};
+  for (auto const& result : noteol_range) {
+    matches.emplace_back(result.start_pos(), result.end_pos());
+  }
+  CHECK(matches == std::vector{std::pair{0uz, 1uz}});
+  CHECK(noteol_range.error().empty());
+}
+
+TEST_CASE("review: copied iterators retain cached continuation state", "[review][iteration]") {
+  auto const ctx   = pcrepp::context<>::create(R"(\w+)").value();
+  auto       range = ctx.find_all("aa bb");
+  auto       first = range.begin();
+  auto       copy  = first;
+  auto const end   = range.end();
+
+  auto previous = first++;
+  REQUIRE(previous != end);
+  REQUIRE(first != end);
+  REQUIRE(copy != end);
+  CHECK((*previous)[0] == "aa");
+  CHECK((*first)[0] == "bb");
+  CHECK((*copy)[0] == "aa");
+
+  ++previous;
+  REQUIRE(previous != end);
+  CHECK((*previous)[0] == "bb");
+
+  ++copy;
+  REQUIRE(copy != end);
+  CHECK((*copy)[0] == "bb");
+  ++first;
+  ++previous;
+  ++copy;
+  CHECK(first == end);
+  CHECK(previous == end);
+  CHECK(copy == end);
+  CHECK(range.error().empty());
+}
+
+TEST_CASE("review: UTF global iteration advances by codepoints", "[iteration][utf]") {
+  auto const ctx     = pcrepp::context<>::create("", PCRE2_UTF).value();
+  auto       range   = ctx.find_all("あ");
+  auto       offsets = std::vector<size_t>{};
+  for (auto const& result : range) {
+    offsets.push_back(result.start_pos());
+  }
+
+  CHECK(static_cast<bool>(range));
+  CHECK(range.error().empty());
+  CHECK(offsets == std::vector{0uz, 3uz});
+}
+
+TEST_CASE("review: CRLF global iteration follows PCRE2 transitions", "[iteration][crlf]") {
+  auto const ctx     = pcrepp::context<>::create(R"((?=\r?$))", PCRE2_MULTILINE).value();
+  auto       range   = ctx.find_all("a\r\nb");
+  auto       offsets = std::vector<size_t>{};
+  for (auto const& result : range) {
+    offsets.push_back(result.start_pos());
+  }
+
+  CHECK(static_cast<bool>(range));
+  CHECK(range.error().empty());
+  CHECK(offsets == std::vector{1uz, 2uz, 4uz});
+}
+
+TEST_CASE("review: match_range publishes initial matching errors", "[iteration][error]") {
+  SECTION("invalid start") {
+    auto const ctx   = pcrepp::context<>::create(R"(.)").value();
+    auto       range = ctx.find_all("a", 0u, 2uz);
+    CHECK_FALSE(static_cast<bool>(range));
+    CHECK_FALSE(range.error().empty());
+    CHECK(range.error().find("start offset") != std::string_view::npos);
+    CHECK(range.begin() == range.end());
+  }
+
+  SECTION("invalid UTF") {
+    auto const ctx   = pcrepp::context<>::create(R"(.)", PCRE2_UTF).value();
+    auto const input = std::string_view{"\xff", 1uz};
+    auto       range = ctx.find_all(input);
+    CHECK_FALSE(static_cast<bool>(range));
+    CHECK_FALSE(range.error().empty());
+    CHECK(range.begin() == range.end());
+  }
+
+  SECTION("initial match limit") {
+    auto ctx = pcrepp::context<>::create(R"(a|((b+)+c))").value();
+    ctx.set_depth_limit(10u);
+    auto const input = std::string(20uz, 'b') + 'x';
+    auto       range = ctx.find_all(input);
+    CHECK_FALSE(static_cast<bool>(range));
+    CHECK(range.error().find("code " + std::to_string(PCRE2_ERROR_DEPTHLIMIT)) != std::string_view::npos);
+    CHECK(range.begin() == range.end());
+  }
+
+  SECTION("no match is not an error") {
+    auto const ctx   = pcrepp::context<>::create(R"(z)").value();
+    auto       range = ctx.find_all("abc");
+    CHECK(static_cast<bool>(range));
+    CHECK(range.error().empty());
+    CHECK(range.begin() == range.end());
+  }
+}
+
+TEST_CASE("review: match_range copy and move rebind matching errors", "[iteration][error]") {
+  auto const ctx = pcrepp::context<>::create(R"(.)").value();
+
+  auto invalid_source = ctx.find_all("a", 0u, 2uz);
+  REQUIRE_FALSE(static_cast<bool>(invalid_source));
+  auto const initial_error = std::string{invalid_source.error()};
+
+  auto copied = invalid_source;
+  CHECK(copied.first.error_ref == &copied.m_error);
+  CHECK(copied.last.error_ref == &copied.m_error);
+  CHECK(copied.error() == initial_error);
+
+  auto copy_assigned = decltype(invalid_source){};
+  copy_assigned      = invalid_source;
+  CHECK(copy_assigned.first.error_ref == &copy_assigned.m_error);
+  CHECK(copy_assigned.last.error_ref == &copy_assigned.m_error);
+  CHECK(copy_assigned.error() == initial_error);
+
+  auto move_source = ctx.find_all("a", 0u, 2uz);
+  auto moved       = std::move(move_source);
+  CHECK(moved.first.error_ref == &moved.m_error);
+  CHECK(moved.last.error_ref == &moved.m_error);
+  CHECK(moved.error() == initial_error);
+  CHECK(move_source.first.error_ref == &move_source.m_error);
+  CHECK(move_source.last.error_ref == &move_source.m_error);
+
+  auto move_assign_source = ctx.find_all("a", 0u, 2uz);
+  auto move_assigned      = decltype(move_assign_source){};
+  move_assigned           = std::move(move_assign_source);
+  CHECK(move_assigned.first.error_ref == &move_assigned.m_error);
+  CHECK(move_assigned.last.error_ref == &move_assigned.m_error);
+  CHECK(move_assigned.error() == initial_error);
+  CHECK(move_assign_source.first.error_ref == &move_assign_source.m_error);
+  CHECK(move_assign_source.last.error_ref == &move_assign_source.m_error);
+}
+
+TEST_CASE("review: copied and moved ranges receive later iteration errors", "[iteration][error]") {
+  auto ctx = pcrepp::context<>::create(R"(a|((b+)+c))").value();
+  ctx.set_depth_limit(10u);
+  auto const input = "a" + std::string(20uz, 'b') + 'x';
+  auto       base  = ctx.find_all(input);
+  REQUIRE(static_cast<bool>(base));
+
+  auto copied = base;
+
+  auto move_ctor_source = base;
+  auto moved            = std::move(move_ctor_source);
+
+  auto copy_assigned = decltype(base){};
+  copy_assigned      = base;
+
+  auto move_assign_source = base;
+  auto move_assigned      = decltype(base){};
+  move_assigned           = std::move(move_assign_source);
+
+  auto  self_moved = base;
+  auto* self_alias = &self_moved;
+  self_moved       = std::move(*self_alias);
+
+  auto const verify_later_error = [](auto& range) {
+    CHECK(range.first.error_ref == &range.m_error);
+    CHECK(range.last.error_ref == &range.m_error);
+    auto it = range.begin();
+    REQUIRE(it != range.end());
+    CHECK((*it)[0] == "a");
+    ++it;
+    CHECK(it == range.end());
+    CHECK_FALSE(static_cast<bool>(range));
+    CHECK(range.error().find("code " + std::to_string(PCRE2_ERROR_DEPTHLIMIT)) != std::string_view::npos);
+  };
+
+  verify_later_error(copied);
+  verify_later_error(moved);
+  verify_later_error(copy_assigned);
+  verify_later_error(move_assigned);
+  verify_later_error(self_moved);
+}
+
+TEST_CASE("review: custom JIT flags propagate through find_all range", "[review][jitflags]") {
+  auto constexpr jit_flags = PCRE2_JIT_COMPLETE | PCRE2_JIT_PARTIAL_SOFT;
+  using context_type       = pcrepp::context<true, jit_flags>;
+  auto const ctx           = context_type::create(R"(\w+)").value();
+  auto       range         = ctx.find_all("aa bb");
+
+  static_assert(std::same_as<decltype(range), pcrepp::match_range<true, jit_flags>>);
+  static_assert(std::same_as<decltype(range.begin()), pcrepp::iterator<true, jit_flags>>);
+
+  auto matches = std::vector<std::string_view>{};
+  for (auto const& result : range) {
+    matches.push_back(result[0]);
+  }
+  CHECK(matches == std::vector<std::string_view>{"aa", "bb"});
 }

@@ -648,7 +648,7 @@ struct use_tls_t {};
 inline constexpr auto use_tls = use_tls_t{};
 
 
-template <bool UseJIT>
+template <bool UseJIT, unsigned JITFlags = PCRE2_JIT_COMPLETE>
 struct iterator;
 
 template <bool UseJIT = true, unsigned JITFlags = PCRE2_JIT_COMPLETE>
@@ -1022,7 +1022,7 @@ struct match_result {
     holder->target  = {};
   }
 
-  template <bool UseJIT>
+  template <bool UseJIT, unsigned JITFlags>
   friend struct iterator;
   template <bool UseJIT, unsigned JITFlags>
   friend struct context;
@@ -1068,8 +1068,10 @@ inline auto match_result::to_tuple() const noexcept -> detail::string_view_tuple
 /**
  * @struct iterator
  * @brief すべてのマッチ箇所を列挙するための前方イテレータ
+ * @tparam UseJIT JIT コンパイルを使用するか
+ * @tparam JITFlags コンテキストの JIT コンパイルフラグ
  */
-template <bool UseJIT>
+template <bool UseJIT, unsigned JITFlags>
 struct iterator {
   using iterator_concept  = std::forward_iterator_tag;
   using iterator_category = std::forward_iterator_tag;
@@ -1078,16 +1080,20 @@ struct iterator {
   using pointer           = match_result const*;
   using reference         = match_result const&;
 
-  context<UseJIT> const* ctx    = nullptr;
-  std::string_view       target = {};
-  size_t                 pos    = 0uz;
-  unsigned int           option = 0;
-  bool                   is_end = true;
-  match_result           result;
-  std::string*           error_ref = nullptr;
+  context<UseJIT, JITFlags> const* ctx    = nullptr;
+  std::string_view                 target = {};
+  size_t                           pos    = 0uz;
+  unsigned int                     option = 0;
+  bool                             is_end = true;
+  match_result                     result;
+  std::string*                     error_ref    = nullptr;
+  bool                             has_next     = false;  ///< 直前の成功マッチから継続試行が必要か
+  size_t                           next_offset  = 0uz;    ///< pcre2_next_match() が返した次回開始位置
+  unsigned int                     next_options = 0;      ///< pcre2_next_match() が返した追加オプション
+  size_t                           match_number = 0uz;    ///< 同一開始位置のゼロ幅遷移も区別する連番
 
   iterator() = default;
-  iterator(context<UseJIT> const* const c, std::string_view const t, size_t const p, unsigned int const o, bool const end, std::string* const err = nullptr);
+  iterator(context<UseJIT, JITFlags> const* const c, std::string_view const t, size_t const p, unsigned int const o, bool const end, std::string* const err = nullptr);
 
   auto operator++() -> iterator&;
   auto operator++(int) -> iterator {
@@ -1101,41 +1107,45 @@ struct iterator {
     if (is_end && other.is_end) {
       return ctx == other.ctx;
     }
-    return is_end == other.is_end && ctx == other.ctx && pos == other.pos;
+    return is_end == other.is_end && ctx == other.ctx && pos == other.pos && match_number == other.match_number;
   }
 };
 
 /**
  * @struct match_range
  * @brief match_result を巡回するための view
+ * @tparam UseJIT JIT コンパイルを使用するか
+ * @tparam JITFlags コンテキストの JIT コンパイルフラグ
  */
-template <bool UseJIT>
-struct match_range : std::ranges::view_interface<match_range<UseJIT>> {
-  iterator<UseJIT> first;
-  iterator<UseJIT> last;
-  std::string      m_error;
+template <bool UseJIT, unsigned JITFlags = PCRE2_JIT_COMPLETE>
+struct match_range : std::ranges::view_interface<match_range<UseJIT, JITFlags>> {
+  std::string                m_error;
+  iterator<UseJIT, JITFlags> first;
+  iterator<UseJIT, JITFlags> last;
 
   match_range() = default;
-  match_range(iterator<UseJIT> f, iterator<UseJIT> l) noexcept : first(std::move(f)), last(std::move(l)) {
+  match_range(iterator<UseJIT, JITFlags> f, iterator<UseJIT, JITFlags> l) noexcept : first(std::move(f)), last(std::move(l)) {
     first.error_ref = &m_error;
     last.error_ref  = &m_error;
   }
+  match_range(context<UseJIT, JITFlags> const& c, std::string_view const target, unsigned int const option, size_t const start)
+      : first(&c, target, start, option, false, &m_error), last(&c, target, start, option, true, &m_error) {}
 
   // コピー/ムーブ時は error_ref が this->m_error を指すように付け直す
   // （デフォルトコピーだとコピー元の破棄済み m_error を指してしまう）
-  match_range(match_range const& other) : first(other.first), last(other.last), m_error(other.m_error) {
+  match_range(match_range const& other) : m_error(other.m_error), first(other.first), last(other.last) {
     first.error_ref = &m_error;
     last.error_ref  = &m_error;
   }
-  match_range(match_range&& other) noexcept : first(std::move(other.first)), last(std::move(other.last)), m_error(std::move(other.m_error)) {
+  match_range(match_range&& other) noexcept : m_error(std::move(other.m_error)), first(std::move(other.first)), last(std::move(other.last)) {
     first.error_ref = &m_error;
     last.error_ref  = &m_error;
   }
   auto operator=(match_range const& other) -> match_range& {
     if (this != &other) {
+      m_error         = other.m_error;
       first           = other.first;
       last            = other.last;
-      m_error         = other.m_error;
       first.error_ref = &m_error;
       last.error_ref  = &m_error;
     }
@@ -1143,9 +1153,9 @@ struct match_range : std::ranges::view_interface<match_range<UseJIT>> {
   }
   auto operator=(match_range&& other) noexcept -> match_range& {
     if (this != &other) {
+      m_error         = std::move(other.m_error);
       first           = std::move(other.first);
       last            = std::move(other.last);
-      m_error         = std::move(other.m_error);
       first.error_ref = &m_error;
       last.error_ref  = &m_error;
     }
@@ -1634,26 +1644,32 @@ struct context {
     auto result = std::string{};
     result.reserve(target.size() + (target.size() / 5uz) + 256uz);
 
-    auto append_pos = 0uz;
-    auto search_pos = 0uz;
-    auto mr         = match_result{*this};
+    auto append_pos                    = 0uz;
+    auto search_pos                    = 0uz;
+    auto constexpr application_options = 0u;
+    auto iteration_options             = 0u;
+    auto mr                            = match_result{*this};
     while (true) {
-      auto const rc = find(target, mr, search_pos, 0);
+      auto const rc = find(target, mr, search_pos, application_options | iteration_options);
       if (not rc) {
         return std::unexpected{rc.error()};
       }
       if (*rc <= 0) {
         break;
       }
+      auto       next_pos     = PCRE2_SIZE{};
+      auto       next_options = uint32_t{};
+      auto const has_next     = pcre2_next_match(mr.get_data(), &next_pos, &next_options) != 0;
       auto const start = mr.start_pos();
       auto const end   = mr.end_pos();
       result.append(target.substr(append_pos, start - append_pos));
       result.append(callback(mr));
       append_pos = end;
-      search_pos = (start == end) ? end + 1uz : end;
-      if (search_pos > target.size()) {
+      if (not has_next) {
         break;
       }
+      search_pos        = static_cast<size_t>(next_pos);
+      iteration_options = next_options;
     }
     if (append_pos < target.size()) {
       result.append(target.substr(append_pos));
@@ -1682,13 +1698,10 @@ struct context {
    * @param target 検索対象の文字列
    * @param option 検索オプション (PCRE2_NOTBOL 等)
    * @param start 検索開始バイト位置（デフォルト 0）
-   * @return match_range<UseJIT>
+   * @return match_range<UseJIT, JITFlags>
    */
-  auto find_all(std::string_view const target, unsigned int const option = 0, size_t const start = 0uz) const -> match_range<UseJIT> {
-    // prvalue で構築して guaranteed copy elision (C++17) を効かせる。
-    // ユーザー定義の copy/move ctor が存在すると NRVO が無効化されるため、
-    // 名前付きローカル変数ではなく直接 return する。
-    return match_range<UseJIT>{iterator<UseJIT>(this, target, start, option, false), iterator<UseJIT>(this, target, start, option, true)};
+  auto find_all(std::string_view const target, unsigned int const option = 0, size_t const start = 0uz) const -> match_range<UseJIT, JITFlags> {
+    return match_range<UseJIT, JITFlags>{*this, target, option, start};
   }
 
   /**
@@ -2368,7 +2381,7 @@ auto find_unchecked(std::string_view const target, size_t const start = 0uz, uns
  */
 template <fixed_string Pattern, bool UseJIT = true>
 auto find_all(std::string_view const target, unsigned int const option = 0, size_t const start = 0uz)
-  -> std::expected<match_range<UseJIT>, std::string> {
+  -> std::expected<match_range<UseJIT, PCRE2_JIT_COMPLETE>, std::string> {
   auto ctx_res = detail::get_nttp_context<Pattern, UseJIT>();
   if (not ctx_res) {
     return std::unexpected{ctx_res.error()};
@@ -2499,17 +2512,22 @@ auto replace(std::string_view const target, unsigned int const option = PCRE2_SU
     auto out = std::string{};
     out.reserve(target.size() + target.size() / 4uz + 64uz);
 
-    auto  append_pos = 0uz;
-    auto  search_pos = 0uz;
-    auto* md         = detail::get_tls_match_data(ctx_ptr->get_code());
+    auto append_pos                    = 0uz;
+    auto search_pos                    = 0uz;
+    auto constexpr application_options = 0u;
+    auto  iteration_options            = 0u;
+    auto* md                           = detail::get_tls_match_data(ctx_ptr->get_code());
     while (true) {
-      auto const rc = ctx_ptr->find(target, md, search_pos, 0);
+      auto const rc = ctx_ptr->find(target, md, search_pos, application_options | iteration_options);
       if (not rc) {
         return std::unexpected{rc.error()};
       }
       if (*rc <= 0) {
         break;
       }
+      auto        next_pos     = PCRE2_SIZE{};
+      auto        next_options = uint32_t{};
+      auto const  has_next     = is_global && pcre2_next_match(md, &next_pos, &next_options) != 0;
       auto const* ov    = pcre2_get_ovector_pointer(md);
       auto const  start = ov[0];
       auto const  end   = ov[1];
@@ -2533,11 +2551,11 @@ auto replace(std::string_view const target, unsigned int const option = PCRE2_SU
       if (!is_global) {
         break;  // 非グローバル置換: 最初の 1 件のみ
       }
-      // ゼロ幅マッチでは 1 文字進めて無限ループを防ぐ (context::replace と同じ規約)
-      search_pos = (start == end) ? end + 1uz : end;
-      if (search_pos > target.size()) {
+      if (not has_next) {
         break;
       }
+      search_pos        = static_cast<size_t>(next_pos);
+      iteration_options = next_options;
     }
     out.append(target.substr(append_pos));
     return out;
@@ -2840,8 +2858,8 @@ inline match_result::match_result(context<UseJIT, JITFlags> const& ctx, size_t c
   }
 }
 
-template <bool UseJIT>
-inline iterator<UseJIT>::iterator(context<UseJIT> const* const c, std::string_view const t, size_t const p, unsigned int const o, bool const end, std::string* const err)
+template <bool UseJIT, unsigned JITFlags>
+inline iterator<UseJIT, JITFlags>::iterator(context<UseJIT, JITFlags> const* const c, std::string_view const t, size_t const p, unsigned int const o, bool const end, std::string* const err)
     : ctx(c), target(t), pos(p), option(o), is_end(end), error_ref(err) {
   if (!is_end && ctx) {
     result = match_result(*ctx);
@@ -2850,26 +2868,38 @@ inline iterator<UseJIT>::iterator(context<UseJIT> const* const c, std::string_vi
         *error_ref = rc.error();
       }
       is_end = true;
+    } else {
+      auto next_pos    = PCRE2_SIZE{};
+      auto next_option = uint32_t{};
+      has_next         = pcre2_next_match(result.get_data(), &next_pos, &next_option) != 0;
+      next_offset      = static_cast<size_t>(next_pos);
+      next_options     = has_next ? next_option : 0u;
+      match_number     = 1uz;
     }
   }
 }
 
-template <bool UseJIT>
-inline auto iterator<UseJIT>::operator++() -> iterator& {
+template <bool UseJIT, unsigned JITFlags>
+inline auto iterator<UseJIT, JITFlags>::operator++() -> iterator& {
   if (ctx && not is_end) {
-    auto const prev_start = result.start_pos();
-    auto const prev_end   = result.end_pos();
-    auto const next_pos   = (prev_start == prev_end) ? prev_end + 1uz : prev_end;
-    pos                   = next_pos;
-    if (pos > target.size()) {
+    if (not has_next) {
       is_end = true;
       return *this;
     }
-    if (auto const rc = ctx->find(target, result, pos, option); not rc || *rc <= 0) {
+    pos                      = next_offset;
+    auto const match_options = option | next_options;
+    if (auto const rc = ctx->find(target, result, pos, match_options); not rc || *rc <= 0) {
       if (not rc && error_ref) {
         *error_ref = rc.error();
       }
       is_end = true;
+    } else {
+      auto transition_offset  = PCRE2_SIZE{};
+      auto transition_options = uint32_t{};
+      has_next                = pcre2_next_match(result.get_data(), &transition_offset, &transition_options) != 0;
+      next_offset             = static_cast<size_t>(transition_offset);
+      next_options            = has_next ? transition_options : 0u;
+      ++match_number;
     }
   }
   return *this;
