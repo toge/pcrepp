@@ -147,6 +147,101 @@ TEST_CASE("review: full match uses both anchoring options", "[review][jit][match
   verify(R"(a.*?|a.*)");
 }
 
+TEST_CASE("review: full match accepts partial modes for complete subjects", "[review][jit][match][options]") {
+  using namespace pcrepp;
+  auto const verify = [](unsigned int const option) {
+    auto const jit   = pcrepp::context<true>::create("abc").value();
+    auto const nojit = pcrepp::context<false>::create("abc").value();
+
+    auto const jit_result   = jit.match("abc", option);
+    auto const nojit_result = nojit.match("abc", option);
+    REQUIRE(jit_result);
+    REQUIRE(nojit_result);
+    CHECK(*jit_result);
+    CHECK(*nojit_result);
+
+    auto const nttp_result  = pcrepp::match<"abc">("abc", option);
+    auto const nojit_nttp   = pcrepp::match<"abc", false>("abc", option);
+    auto const regex_result = R"(abc)"_re.match("abc", option);
+    REQUIRE(nttp_result);
+    REQUIRE(nojit_nttp);
+    REQUIRE(regex_result);
+    CHECK(*nttp_result);
+    CHECK(*nojit_nttp);
+    CHECK(*regex_result);
+  };
+
+  verify(PCRE2_PARTIAL_HARD);
+  verify(PCRE2_PARTIAL_SOFT);
+}
+
+TEST_CASE("review: partial modes still backtrack to a full ordered alternative", "[review][jit][match][options]") {
+  using namespace pcrepp;
+  auto const verify = [](unsigned int const option) {
+    auto const jit   = pcrepp::context<true>::create("a|ab").value();
+    auto const nojit = pcrepp::context<false>::create("a|ab").value();
+
+    auto const jit_result   = jit.match("ab", option);
+    auto const nojit_result = nojit.match("ab", option);
+    REQUIRE(jit_result);
+    REQUIRE(nojit_result);
+    CHECK(*jit_result);
+    CHECK(*nojit_result);
+
+    auto const nttp_result  = pcrepp::match<"a|ab">("ab", option);
+    auto const nojit_nttp   = pcrepp::match<"a|ab", false>("ab", option);
+    auto const regex_result = R"(a|ab)"_re.match("ab", option);
+    REQUIRE(nttp_result);
+    REQUIRE(nojit_nttp);
+    REQUIRE(regex_result);
+    CHECK(*nttp_result);
+    CHECK(*nojit_nttp);
+    CHECK(*regex_result);
+  };
+
+  verify(PCRE2_PARTIAL_HARD);
+  verify(PCRE2_PARTIAL_SOFT);
+}
+
+TEST_CASE("review: incomplete full match preserves partial-mode errors", "[review][jit][match][options]") {
+  using namespace pcrepp;
+  auto const verify = [](unsigned int const option) {
+    auto const jit   = pcrepp::context<true>::create("abc").value();
+    auto const nojit = pcrepp::context<false>::create("abc").value();
+
+    auto const jit_result      = jit.match("ab", option);
+    auto const nojit_result    = nojit.match("ab", option);
+    auto const jit_reference   = jit.find("ab", 0uz, option | PCRE2_ANCHORED);
+    auto const nojit_reference = nojit.find("ab", 0uz, option | PCRE2_ANCHORED);
+    REQUIRE_FALSE(jit_reference);
+    REQUIRE_FALSE(nojit_reference);
+    REQUIRE_FALSE(jit_result);
+    REQUIRE_FALSE(nojit_result);
+    CHECK(jit_result.error() == jit_reference.error());
+    CHECK(nojit_result.error() == nojit_reference.error());
+    CHECK(jit_result.error().find("code " + std::to_string(PCRE2_ERROR_PARTIAL)) != std::string::npos);
+
+    auto const nttp_result     = pcrepp::match<"abc">("ab", option);
+    auto const nojit_nttp      = pcrepp::match<"abc", false>("ab", option);
+    auto const regex_result    = R"(abc)"_re.match("ab", option);
+    auto const nttp_reference  = pcrepp::find<"abc">("ab", 0uz, option | PCRE2_ANCHORED);
+    auto const nojit_nttp_ref  = pcrepp::find<"abc", false>("ab", 0uz, option | PCRE2_ANCHORED);
+    auto const regex_reference = R"(abc)"_re.find("ab", 0uz, option | PCRE2_ANCHORED);
+    REQUIRE_FALSE(nttp_reference);
+    REQUIRE_FALSE(nojit_nttp_ref);
+    REQUIRE_FALSE(regex_reference);
+    REQUIRE_FALSE(nttp_result);
+    REQUIRE_FALSE(nojit_nttp);
+    REQUIRE_FALSE(regex_result);
+    CHECK(nttp_result.error() == nttp_reference.error());
+    CHECK(nojit_nttp.error() == nojit_nttp_ref.error());
+    CHECK(regex_result.error() == regex_reference.error());
+  };
+
+  verify(PCRE2_PARTIAL_HARD);
+  verify(PCRE2_PARTIAL_SOFT);
+}
+
 TEST_CASE("review: JIT contexts honor setter depth and heap limits", "[review][jit][e3]") {
   // 必須末尾 b の開始位置最適化だけで検索が脱落しないようにし、深さ制限まで到達させる。
   auto const depth_input = std::string(20uz, 'a') + 'c';

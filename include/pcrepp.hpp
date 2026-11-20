@@ -1545,6 +1545,8 @@ struct context {
    * @brief 完全一致するかどうかを判定する便利メソッド
    *
    * mr が未初期化の場合は自動で初期化してから検索する。
+   * partial オプション指定時は完全一致を先に試し、失敗した場合だけ
+   * ENDANCHORED を外した partial 検索で PCRE2 本来の結果を返す。
    *
    * @param target 判定対象の文字列
    * @param mr マッチ結果を格納するオブジェクト（未初期化でも可）
@@ -1555,14 +1557,26 @@ struct context {
     if (not mr.holder || not mr.holder->data) {
       mr = match_result{*this};
     }
-    auto const rc = find(target, mr, 0uz, option | PCRE2_ANCHORED | PCRE2_ENDANCHORED);
-    if (not rc) {
-      return std::unexpected{rc.error()};
+
+    auto constexpr PARTIAL_OPTION_MASK = PCRE2_PARTIAL_HARD | PCRE2_PARTIAL_SOFT;
+    auto const exact_option            = (option & ~PARTIAL_OPTION_MASK) | PCRE2_ANCHORED | PCRE2_ENDANCHORED;
+    auto const exact_result            = find(target, mr, 0uz, exact_option);
+    if (not exact_result) {
+      return std::unexpected{exact_result.error()};
     }
-    if (*rc <= 0) {
+    if (*exact_result > 0) {
+      return mr.end_pos() == target.size();
+    }
+    if ((option & PARTIAL_OPTION_MASK) == 0) {
       return false;
     }
-    return mr.end_pos() == target.size();
+
+    auto const partial_option = (option | PCRE2_ANCHORED) & ~PCRE2_ENDANCHORED;
+    auto const partial_result = find(target, mr, 0uz, partial_option);
+    if (not partial_result) {
+      return std::unexpected{partial_result.error()};
+    }
+    return *partial_result > 0 && mr.end_pos() == target.size();
   }
 
   /**
@@ -2544,7 +2558,7 @@ auto replace_unchecked(std::string_view const target, unsigned int const option 
  * @brief NTTP 版 match：正規表現をテンプレート引数で指定する完全一致判定
  *
  * `context::match(target, option)` の NTTP 版。
- * PCRE2_ANCHORED と PCRE2_ENDANCHORED を併用し、終端位置も防御的に検証する。
+ * 完全一致を先に試し、partial 指定時の継続判定も PCRE2 の挙動に委ねる。
  */
 template <fixed_string Pattern, bool UseJIT = true>
 auto match(std::string_view const target, unsigned int const option = 0) -> std::expected<bool, std::string> {
