@@ -660,13 +660,15 @@ struct context;
  */
 struct match_result {
   struct data_holder {
-    pcre2_code const* code          = nullptr;
-    pcre2_match_data* data          = nullptr;
-    size_t*           ovector       = nullptr;
-    size_t            ovector_count = 0uz;  ///< pcre2_get_ovector_count(data) のキャッシュ（get_view の範囲チェック用）
-    std::string_view  target        = {};   ///< @brief 非所有。get() コール時点で元の文字列が生存している必要あり
+    std::shared_ptr<pcre2_code> code_owner;
+    pcre2_code const*           code          = nullptr;
+    pcre2_match_data*           data          = nullptr;
+    size_t*                     ovector       = nullptr;
+    size_t                      ovector_count = 0uz;    ///< pcre2_get_ovector_count(data) のキャッシュ（get_view の範囲チェック用）
+    std::string_view            target        = {};     ///< @brief 非所有。get() コール時点で元の文字列が生存している必要あり
+    bool                        matched       = false;  ///< @brief data の割り当てとは独立した実際のマッチ状態
 
-    data_holder(pcre2_code const* const c) : code(c) {
+    explicit data_holder(std::shared_ptr<pcre2_code> owner) : code_owner(std::move(owner)), code(code_owner.get()) {
       if (code) {
         data          = pcre2_match_data_create_from_pattern(code, nullptr);
         ovector       = data ? pcre2_get_ovector_pointer(data) : nullptr;
@@ -674,10 +676,13 @@ struct match_result {
       }
     }
 
-    /// @brief 既存の pcre2_match_data を受け取るコンストラクタ（E11 oversized match_data 用）
-    data_holder(pcre2_code const* const c, pcre2_match_data* const d) : code(c), data(d) {
-      ovector       = data ? pcre2_get_ovector_pointer(data) : nullptr;
-      ovector_count = data ? static_cast<size_t>(pcre2_get_ovector_count(data)) : 0uz;
+    /// @brief 指定容量で pcre2_match_data を新規確保する（コピー・oversized 用）
+    data_holder(std::shared_ptr<pcre2_code> owner, size_t const capacity) : code_owner(std::move(owner)), code(code_owner.get()) {
+      if (code && capacity > 0uz) {
+        data          = pcre2_match_data_create(static_cast<uint32_t>(capacity), nullptr);
+        ovector       = data ? pcre2_get_ovector_pointer(data) : nullptr;
+        ovector_count = data ? static_cast<size_t>(pcre2_get_ovector_count(data)) : 0uz;
+      }
     }
 
     ~data_holder() {
@@ -699,10 +704,13 @@ struct match_result {
    * @param other コピー元
    */
   void copy_from(match_result const& other) {
-    if (other.holder && other.holder->code) {
-      holder = std::make_shared<data_holder>(other.holder->code);
-      copy_ovector(holder->ovector, holder->data, other.holder->ovector, other.holder->data);
-      holder->target = other.holder->target;
+    if (other.holder && other.holder->code_owner && other.holder->code) {
+      holder = std::make_shared<data_holder>(other.holder->code_owner, other.holder->ovector_count);
+      if (other.holder->matched && holder->data) {
+        copy_ovector(holder->ovector, holder->data, other.holder->ovector, other.holder->data);
+        holder->target  = other.holder->target;
+        holder->matched = true;
+      }
     } else {
       holder.reset();
     }
@@ -744,7 +752,7 @@ struct match_result {
    */
   template <supported_match_result_get_type T = std::string_view>
   auto get(std::string_view const name) const noexcept(supported_match_result_get_is_nothrow<T>) -> T {
-    if (not holder || not holder->code || not holder->data) {
+    if (not static_cast<bool>(*this)) {
       return T{};
     }
     auto const index = detail::lookup_named_capture(holder->code, name);
@@ -807,7 +815,7 @@ struct match_result {
    */
   template <supported_integer_get_type T>
   auto try_get(std::string_view const name) const noexcept -> std::optional<T> {
-    if (not holder || not holder->code || not holder->data) {
+    if (not static_cast<bool>(*this)) {
       return std::nullopt;
     }
     auto const index = detail::lookup_named_capture(holder->code, name);
@@ -819,7 +827,7 @@ struct match_result {
   template <typename T>
     requires(std::same_as<T, float> || std::same_as<T, double>)
   auto try_get(std::string_view const name) const noexcept -> std::optional<T> {
-    if (not holder || not holder->code || not holder->data) {
+    if (not static_cast<bool>(*this)) {
       return std::nullopt;
     }
     auto const index = detail::lookup_named_capture(holder->code, name);
@@ -835,7 +843,7 @@ struct match_result {
   template <typename T>
     requires std::same_as<T, std::string_view>
   auto try_get(std::string_view const name) const noexcept -> std::optional<std::string_view> {
-    if (not holder || not holder->code || not holder->data)
+    if (not static_cast<bool>(*this))
       return std::nullopt;
     auto const idx = detail::lookup_named_capture(holder->code, name);
     if (idx < 0)
@@ -873,11 +881,11 @@ struct match_result {
     return get(static_cast<size_t>(index));
   }
   auto     operator[](std::string_view const name) const noexcept -> std::string_view { return get(name); }
-  explicit operator bool() const noexcept { return holder && holder->data; }
+  explicit operator bool() const noexcept { return holder && holder->matched && holder->code_owner && holder->code && holder->data; }
   /// @brief コンパイル済み正規表現コードへのポインタを返す
   auto get_code() const noexcept -> pcre2_code const* { return holder ? holder->code : nullptr; }
   /// @brief 全体マッチ + キャプチャグループの総数を返す (= capture_count + 1)
-  auto size() const noexcept -> size_t { return holder ? holder->ovector_count : 0uz; }
+  auto size() const noexcept -> size_t { return static_cast<bool>(*this) ? holder->ovector_count : 0uz; }
 
   // イテレーション対応
   struct group_iterator {
@@ -906,15 +914,15 @@ struct match_result {
   auto begin() const noexcept -> group_iterator { return {this, 0uz}; }
   auto end() const noexcept -> group_iterator { return {this, size()}; }
 
-  auto start_pos() const noexcept -> size_t { return holder ? holder->ovector[0] : 0uz; }
-  auto end_pos() const noexcept -> size_t { return holder ? holder->ovector[1] : 0uz; }
+  auto start_pos() const noexcept -> size_t { return static_cast<bool>(*this) ? holder->ovector[0] : 0uz; }
+  auto end_pos() const noexcept -> size_t { return static_cast<bool>(*this) ? holder->ovector[1] : 0uz; }
 
   /// @brief インデックスがコンパイル時に確定している経路用の範囲チェックなし取得
   ///
   /// `detail::match_result_to_tuple_impl` は `Is < N`（N はパターンの
   /// `count_capture_groups` から確定）が静的保証されるため安全。
   auto get_view_unchecked(size_t const index) const noexcept -> std::string_view {
-    if (not holder) {
+    if (not static_cast<bool>(*this)) {
       return {};  // デフォルト構築 (未マッチ) の match_result からの呼び出しに備える
     }
     auto const s = holder->ovector[index * 2uz + 0uz];
@@ -945,16 +953,19 @@ struct match_result {
     }
   }
 
-  match_result(pcre2_code const* const code, pcre2_match_data* const src_data, std::string_view const target) {
-    if (code && src_data) {
-      holder = std::make_shared<data_holder>(code);
-      copy_ovector(holder->ovector, holder->data, pcre2_get_ovector_pointer(src_data), src_data);
-      holder->target = target;
+  match_result(std::shared_ptr<pcre2_code> const& code_owner, pcre2_match_data* const src_data, std::string_view const target) {
+    if (code_owner && src_data) {
+      holder = std::make_shared<data_holder>(code_owner);
+      if (holder->data) {
+        copy_ovector(holder->ovector, holder->data, pcre2_get_ovector_pointer(src_data), src_data);
+        holder->target  = target;
+        holder->matched = true;
+      }
     }
   }
 
   auto try_get_view(size_t const index) const noexcept -> std::optional<std::string_view> {
-    if (not holder || not holder->data)
+    if (not static_cast<bool>(*this))
       return std::nullopt;
     if (index >= holder->ovector_count)
       return std::nullopt;
@@ -970,7 +981,7 @@ struct match_result {
   }
 
   auto get_view(size_t const index) const noexcept -> std::string_view {
-    if (not holder || not holder->data) {
+    if (not static_cast<bool>(*this)) {
       return {};
     }
     if (index >= holder->ovector_count) {
@@ -987,18 +998,28 @@ struct match_result {
     return holder->target.substr(s, e - s);
   }
 
-  match_result(pcre2_code const* const code) {
-    if (code) {
-      holder = std::make_shared<data_holder>(code);
+  explicit match_result(std::shared_ptr<pcre2_code> const& code_owner) {
+    if (code_owner) {
+      holder = std::make_shared<data_holder>(code_owner);
     }
   }
 
   auto get_ovector() const noexcept -> size_t* { return holder ? holder->ovector : nullptr; }
   auto get_data() const noexcept -> pcre2_match_data* { return holder ? holder->data : nullptr; }
-  auto set_target(std::string_view const t) noexcept {
+  auto set_match(std::string_view const t) noexcept {
     if (holder) {
-      holder->target = t;
+      holder->target  = t;
+      holder->matched = true;
     }
+  }
+
+  /// @brief 次の実際のマッチ試行前に公開可能な旧状態を消去する
+  auto clear_match() noexcept {
+    if (not holder) {
+      return;
+    }
+    holder->matched = false;
+    holder->target  = {};
   }
 
   template <bool UseJIT>
@@ -1149,9 +1170,10 @@ struct match_range : std::ranges::view_interface<match_range<UseJIT>> {
 template <bool UseJIT, unsigned JITFlags>
 struct context {
   private:
-  pcre2_code*          code      = nullptr;
-  pcre2_match_context* match_ctx = nullptr;  ///< 制限設定用。nullptr は「制限なし」
-  PCRE2_SIZE           jit_size_ = 0;        ///< JIT コードサイズ（キャッシュ用）
+  std::shared_ptr<pcre2_code> code_owner;
+  pcre2_code*                 code      = nullptr;
+  pcre2_match_context*        match_ctx = nullptr;  ///< 制限設定用。nullptr は「制限なし」
+  PCRE2_SIZE                  jit_size_ = 0;        ///< JIT コードサイズ（キャッシュ用）
   /// @brief JIT が無視する制限 (heap_limit / depth_limit) が設定されたか
   ///
   /// PCRE2 公式ドキュメント上、`pcre2_jit_match` は heap_limit と depth_limit を
@@ -1204,7 +1226,8 @@ struct context {
   context(context const&)                    = delete;
   auto operator=(context const&) -> context& = delete;
 
-  context(context&& other) noexcept : code(other.code), match_ctx(other.match_ctx), jit_size_(other.jit_size_), has_jit_unsupported_limits_(other.has_jit_unsupported_limits_) {
+  context(context&& other) noexcept
+      : code_owner(std::move(other.code_owner)), code(other.code), match_ctx(other.match_ctx), jit_size_(other.jit_size_), has_jit_unsupported_limits_(other.has_jit_unsupported_limits_) {
     other.code                        = nullptr;
     other.match_ctx                   = nullptr;
     other.jit_size_                   = 0;
@@ -1216,6 +1239,7 @@ struct context {
       if (match_ctx) {
         pcre2_match_context_free(match_ctx);
       }
+      code_owner                        = std::move(other.code_owner);
       code                              = other.code;
       match_ctx                         = other.match_ctx;
       jit_size_                         = other.jit_size_;
@@ -1238,10 +1262,8 @@ struct context {
    *
    */
   void release() noexcept {
-    if (code) {
-      pcre2_code_free(code);
-      code = nullptr;
-    }
+    code = nullptr;
+    code_owner.reset();
   }
 
   /**
@@ -1277,8 +1299,9 @@ struct context {
         }
       }
     }
-    this->code      = c;
-    this->jit_size_ = 0;
+    this->code_owner = std::shared_ptr<pcre2_code>{c, [](pcre2_code* const owned) noexcept { pcre2_code_free(owned); }};
+    this->code       = c;
+    this->jit_size_  = 0;
     std::ignore     = pcre2_pattern_info(c, PCRE2_INFO_JITSIZE, &this->jit_size_);
     return {};
   }
@@ -1456,11 +1479,21 @@ struct context {
    * @return std::expected<int, std::string> マッチしたグループ数、マッチしなかった場合は0、エラーの場合はエラーメッセージを返す
    */
   auto find(std::string_view const target, match_result& mr, size_t const start = 0uz, unsigned int const option = 0) const -> std::expected<int, std::string> {
+    mr.clear_match();
+    if (not code_owner || not code) {
+      return std::unexpected{"Not compiled."};
+    }
     if (not mr.holder || not mr.holder->data) {
       return std::unexpected{"match_result not initialized."};
     }
-    mr.set_target(target);
-    return find(target, mr.get_data(), start, option);
+    if (mr.holder->code_owner != code_owner || mr.holder->code != code) {
+      return std::unexpected{"match_result belongs to a different compiled context."};
+    }
+    auto const rc = find(target, mr.get_data(), start, option);
+    if (rc && *rc > 0) {
+      mr.set_match(target);
+    }
+    return rc;
   }
 
   /**
@@ -1478,7 +1511,7 @@ struct context {
     if (*rc <= 0) {
       return match_result{};
     }
-    return match_result{code, md, target};
+    return match_result{code_owner, md, target};
   }
 
   /**
@@ -2780,15 +2813,12 @@ constexpr auto compile() {
 #endif  // PCREPP_HAS_FROZENCHARS
 
 template <bool UseJIT, unsigned JITFlags>
-inline match_result::match_result(context<UseJIT, JITFlags> const& ctx) : match_result(ctx.code) {}
+inline match_result::match_result(context<UseJIT, JITFlags> const& ctx) : match_result(ctx.code_owner) {}
 
 template <bool UseJIT, unsigned JITFlags>
 inline match_result::match_result(context<UseJIT, JITFlags> const& ctx, size_t const oversized_capture_count) {
-  if (ctx.code && oversized_capture_count > 0uz) {
-    auto* data = pcre2_match_data_create(static_cast<uint32_t>(oversized_capture_count), nullptr);
-    if (data) {
-      holder = std::make_shared<data_holder>(ctx.code, data);
-    }
+  if (ctx.code_owner && ctx.code && oversized_capture_count > 0uz) {
+    holder = std::make_shared<data_holder>(ctx.code_owner, oversized_capture_count);
   }
 }
 
