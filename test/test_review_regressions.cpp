@@ -1,6 +1,8 @@
 #include "pcrepp.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <optional>
+#include <ranges>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -95,4 +97,187 @@ TEST_CASE("review: existing result cannot be reused across contexts", "[review][
   REQUIRE_FALSE(reused);
   CHECK(reused.error().find("different") != std::string::npos);
   check_empty_match_result(result);
+}
+
+TEST_CASE("review: JIT dispatch preserves anchoring options", "[review][jit][options]") {
+  auto const jit   = pcrepp::context<true>::create("b").value();
+  auto const nojit = pcrepp::context<false>::create("b").value();
+
+  auto const jit_result   = jit.find("ab", 0uz, PCRE2_ANCHORED);
+  auto const nojit_result = nojit.find("ab", 0uz, PCRE2_ANCHORED);
+  REQUIRE(jit_result);
+  REQUIRE(nojit_result);
+  CHECK_FALSE(*jit_result);
+  CHECK(static_cast<bool>(*jit_result) == static_cast<bool>(*nojit_result));
+
+  auto const jit_no_jit   = jit.find("ab", 0uz, PCRE2_ANCHORED | PCRE2_NO_JIT);
+  auto const nojit_no_jit = nojit.find("ab", 0uz, PCRE2_ANCHORED | PCRE2_NO_JIT);
+  REQUIRE(jit_no_jit);
+  REQUIRE(nojit_no_jit);
+  CHECK_FALSE(*jit_no_jit);
+  CHECK(static_cast<bool>(*jit_no_jit) == static_cast<bool>(*nojit_no_jit));
+}
+
+TEST_CASE("review: JIT dispatch validates invalid UTF", "[review][jit][utf]") {
+  auto const jit   = pcrepp::context<true>::create(".", PCRE2_UTF).value();
+  auto const nojit = pcrepp::context<false>::create(".", PCRE2_UTF).value();
+  auto const input = std::string_view{"\xff", 1uz};
+
+  auto const jit_result   = jit.find(input);
+  auto const nojit_result = nojit.find(input);
+  REQUIRE_FALSE(nojit_result);
+  REQUIRE_FALSE(jit_result);
+  CHECK(jit_result.error() == nojit_result.error());
+}
+
+TEST_CASE("review: full match uses both anchoring options", "[review][jit][match]") {
+  auto const verify = [](std::string_view const pattern) {
+    auto const jit   = pcrepp::context<true>::create(pattern).value();
+    auto const nojit = pcrepp::context<false>::create(pattern).value();
+
+    auto const jit_result   = jit.match("ab");
+    auto const nojit_result = nojit.match("ab");
+    REQUIRE(jit_result);
+    REQUIRE(nojit_result);
+    CHECK(*jit_result);
+    CHECK(*nojit_result);
+  };
+
+  verify("a|ab");
+  verify(R"(a.*?|a.*)");
+}
+
+TEST_CASE("review: JIT contexts honor setter depth and heap limits", "[review][jit][e3]") {
+  // 必須末尾 b の開始位置最適化だけで検索が脱落しないようにし、深さ制限まで到達させる。
+  auto const depth_input = std::string(20uz, 'a') + 'c';
+  auto       jit_depth   = pcrepp::context<true>::create("a").value();
+  auto       nojit_depth = pcrepp::context<false>::create("a").value();
+  jit_depth.set_depth_limit(10u);
+  nojit_depth.set_depth_limit(10u);
+  REQUIRE(jit_depth.compile("(*NO_START_OPT)(a+)+b"));
+  REQUIRE(nojit_depth.compile("(*NO_START_OPT)(a+)+b"));
+
+  auto const jit_depth_result   = jit_depth.find(depth_input);
+  auto const nojit_depth_result = nojit_depth.find(depth_input);
+  REQUIRE_FALSE(nojit_depth_result);
+  REQUIRE_FALSE(jit_depth_result);
+  CHECK(jit_depth_result.error() == nojit_depth_result.error());
+
+  auto const heap_input = std::string(26uz, 'x') + " y";
+  auto       jit_heap   = pcrepp::context<true>::create("(x+x+)+y").value();
+  auto       nojit_heap = pcrepp::context<false>::create("(x+x+)+y").value();
+  jit_heap.set_heap_limit(20u);
+  nojit_heap.set_heap_limit(20u);
+
+  auto const jit_heap_result   = jit_heap.find(heap_input);
+  auto const nojit_heap_result = nojit_heap.find(heap_input);
+  REQUIRE_FALSE(nojit_heap_result);
+  REQUIRE_FALSE(jit_heap_result);
+  CHECK(jit_heap_result.error() == nojit_heap_result.error());
+}
+
+TEST_CASE("review: JIT contexts honor inline pattern limits after move", "[review][jit][e3]") {
+  auto const depth_input = std::string(20uz, 'a') + 'c';
+  auto       original    = pcrepp::context<true>::create("(*NO_START_OPT)(*LIMIT_DEPTH=10)(a+)+b").value();
+  auto       jit_depth   = std::move(original);
+  auto const nojit_depth = pcrepp::context<false>::create("(*NO_START_OPT)(*LIMIT_DEPTH=10)(a+)+b").value();
+
+  auto const jit_depth_result   = jit_depth.find(depth_input);
+  auto const nojit_depth_result = nojit_depth.find(depth_input);
+  REQUIRE_FALSE(nojit_depth_result);
+  REQUIRE_FALSE(jit_depth_result);
+  CHECK(jit_depth_result.error() == nojit_depth_result.error());
+  CHECK_FALSE(original.find(depth_input));
+
+  auto const heap_input = std::string(26uz, 'x') + " y";
+  auto const jit_heap   = pcrepp::context<true>::create("(*LIMIT_HEAP=20)(x+x+)+y").value();
+  auto const nojit_heap = pcrepp::context<false>::create("(*LIMIT_HEAP=20)(x+x+)+y").value();
+
+  auto const jit_heap_result   = jit_heap.find(heap_input);
+  auto const nojit_heap_result = nojit_heap.find(heap_input);
+  REQUIRE_FALSE(nojit_heap_result);
+  REQUIRE_FALSE(jit_heap_result);
+  CHECK(jit_heap_result.error() == nojit_heap_result.error());
+}
+
+TEST_CASE("review: replacement receives active matching limits", "[review][jit][replace][e3]") {
+  auto const verify_error_class = []<bool HasInlineLimit>(std::string_view const pattern, std::string_view const input) {
+    auto jit   = pcrepp::context<true>::create(pattern).value();
+    auto nojit = pcrepp::context<false>::create(pattern).value();
+    if constexpr (not HasInlineLimit) {
+      jit.set_depth_limit(10u);
+      nojit.set_depth_limit(10u);
+    }
+
+    auto const jit_result   = jit.replace(input, "replacement");
+    auto const nojit_result = nojit.replace(input, "replacement");
+    REQUIRE_FALSE(nojit_result);
+    REQUIRE_FALSE(jit_result);
+    CHECK(jit_result.has_value() == nojit_result.has_value());
+  };
+
+  auto const                  depth_input = std::string(20uz, 'a') + 'c';
+  verify_error_class.template operator()<false>("(*NO_START_OPT)(a+)+b", depth_input);
+  verify_error_class.template operator()<true>("(*NO_START_OPT)(*LIMIT_DEPTH=10)(a+)+b", depth_input);
+
+  auto const verify_heap_error_class = []<bool HasInlineLimit>(std::string_view const pattern, std::string_view const input) {
+    auto jit   = pcrepp::context<true>::create(pattern).value();
+    auto nojit = pcrepp::context<false>::create(pattern).value();
+    if constexpr (not HasInlineLimit) {
+      jit.set_heap_limit(20u);
+      nojit.set_heap_limit(20u);
+    }
+
+    auto const jit_result   = jit.replace(input, "replacement");
+    auto const nojit_result = nojit.replace(input, "replacement");
+    REQUIRE_FALSE(nojit_result);
+    REQUIRE_FALSE(jit_result);
+    CHECK(jit_result.has_value() == nojit_result.has_value());
+  };
+
+  auto const                       heap_input = std::string(26uz, 'x') + " y";
+  verify_heap_error_class.template operator()<false>("(x+x+)+y", heap_input);
+  verify_heap_error_class.template operator()<true>("(*LIMIT_HEAP=20)(x+x+)+y", heap_input);
+}
+
+TEST_CASE("review: caller match options survive JIT dispatch", "[review][jit][options]") {
+  auto const jit   = pcrepp::context<true>::create("^abc").value();
+  auto const nojit = pcrepp::context<false>::create("^abc").value();
+
+  auto const jit_result   = jit.find("abc", 0uz, PCRE2_NOTBOL);
+  auto const nojit_result = nojit.find("abc", 0uz, PCRE2_NOTBOL);
+  REQUIRE(jit_result);
+  REQUIRE(nojit_result);
+  CHECK_FALSE(*jit_result);
+  CHECK(static_cast<bool>(*jit_result) == static_cast<bool>(*nojit_result));
+
+  auto const jit_replacement   = jit.replace("abc", "x", PCRE2_NOTBOL);
+  auto const nojit_replacement = nojit.replace("abc", "x", PCRE2_NOTBOL);
+  REQUIRE(jit_replacement);
+  REQUIRE(nojit_replacement);
+  CHECK(*jit_replacement == "abc");
+  CHECK(*jit_replacement == *nojit_replacement);
+}
+
+TEST_CASE("review: substitute overflow retry preserves match options", "[review][jit][replace][options]") {
+  auto const jit         = pcrepp::context<true>::create("^a", PCRE2_MULTILINE).value();
+  auto const nojit       = pcrepp::context<false>::create("^a", PCRE2_MULTILINE).value();
+  auto const replacement = std::string(64uz, 'x');
+  auto       input       = std::string{};
+  auto       expected    = std::string{"a\n"};
+
+  for (auto const line : std::views::iota(1, 80)) {
+    input += "a\n";
+    expected += replacement + '\n';
+    std::ignore = line;
+  }
+  input.insert(0, "a\n");
+
+  auto const options           = PCRE2_NOTBOL | PCRE2_SUBSTITUTE_GLOBAL;
+  auto const jit_replacement   = jit.replace(input, replacement, options);
+  auto const nojit_replacement = nojit.replace(input, replacement, options);
+  REQUIRE(jit_replacement);
+  REQUIRE(nojit_replacement);
+  CHECK(*jit_replacement == expected);
+  CHECK(*nojit_replacement == expected);
 }

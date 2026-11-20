@@ -1173,14 +1173,22 @@ struct context {
   std::shared_ptr<pcre2_code> code_owner;
   pcre2_code*                 code      = nullptr;
   pcre2_match_context*        match_ctx = nullptr;  ///< 制限設定用。nullptr は「制限なし」
-  PCRE2_SIZE                  jit_size_ = 0;        ///< JIT コードサイズ（キャッシュ用）
-  /// @brief JIT が無視する制限 (heap_limit / depth_limit) が設定されたか
-  ///
-  /// PCRE2 公式ドキュメント上、`pcre2_jit_match` は heap_limit と depth_limit を
-  /// 無視する (match_limit / offset_limit は JIT も尊重する)。これらの制限が設定
-  /// されている間は JIT を使わず interpreter (`pcre2_match`) で実行する。
-  bool has_jit_unsupported_limits_ = false;
+  /// @brief match context に JIT 非対応の heap/depth 制限が設定されたか
+  bool has_match_context_limits_ = false;
+  /// @brief パターンに JIT 非対応の inline heap/depth 制限が設定されたか
+  bool has_pattern_limits_ = false;
   friend struct match_result;
+
+  /// @brief 呼び出し元のオプションを維持しつつ、必要なら JIT を無効化する
+  auto effective_match_options(uint32_t const option) const noexcept -> uint32_t {
+    if constexpr (not UseJIT) {
+      return option | PCRE2_NO_JIT;
+    }
+    if (has_match_context_limits_ || has_pattern_limits_) {
+      return option | PCRE2_NO_JIT;
+    }
+    return option;
+  }
 
   /// @brief match_ctx が未生成なら生成する（遅延初期化）
   void ensure_match_context() {
@@ -1227,11 +1235,15 @@ struct context {
   auto operator=(context const&) -> context& = delete;
 
   context(context&& other) noexcept
-      : code_owner(std::move(other.code_owner)), code(other.code), match_ctx(other.match_ctx), jit_size_(other.jit_size_), has_jit_unsupported_limits_(other.has_jit_unsupported_limits_) {
-    other.code                        = nullptr;
-    other.match_ctx                   = nullptr;
-    other.jit_size_                   = 0;
-    other.has_jit_unsupported_limits_ = false;
+      : code_owner(std::move(other.code_owner)),
+        code(other.code),
+        match_ctx(other.match_ctx),
+        has_match_context_limits_(other.has_match_context_limits_),
+        has_pattern_limits_(other.has_pattern_limits_) {
+    other.code                      = nullptr;
+    other.match_ctx                 = nullptr;
+    other.has_match_context_limits_ = false;
+    other.has_pattern_limits_       = false;
   }
   auto operator=(context&& other) noexcept -> context& {
     if (this != &other) {
@@ -1239,15 +1251,15 @@ struct context {
       if (match_ctx) {
         pcre2_match_context_free(match_ctx);
       }
-      code_owner                        = std::move(other.code_owner);
-      code                              = other.code;
-      match_ctx                         = other.match_ctx;
-      jit_size_                         = other.jit_size_;
-      has_jit_unsupported_limits_       = other.has_jit_unsupported_limits_;
-      other.code                        = nullptr;
-      other.match_ctx                   = nullptr;
-      other.jit_size_                   = 0;
-      other.has_jit_unsupported_limits_ = false;
+      code_owner                      = std::move(other.code_owner);
+      code                            = other.code;
+      match_ctx                       = other.match_ctx;
+      has_match_context_limits_       = other.has_match_context_limits_;
+      has_pattern_limits_             = other.has_pattern_limits_;
+      other.code                      = nullptr;
+      other.match_ctx                 = nullptr;
+      other.has_match_context_limits_ = false;
+      other.has_pattern_limits_       = false;
     }
     return *this;
   }
@@ -1264,6 +1276,7 @@ struct context {
   void release() noexcept {
     code = nullptr;
     code_owner.reset();
+    has_pattern_limits_ = false;
   }
 
   /**
@@ -1301,8 +1314,12 @@ struct context {
     }
     this->code_owner = std::shared_ptr<pcre2_code>{c, [](pcre2_code* const owned) noexcept { pcre2_code_free(owned); }};
     this->code       = c;
-    this->jit_size_  = 0;
-    std::ignore     = pcre2_pattern_info(c, PCRE2_INFO_JITSIZE, &this->jit_size_);
+
+    auto       heap_limit      = uint32_t{};
+    auto       depth_limit     = uint32_t{};
+    auto const has_heap_limit  = pcre2_pattern_info(c, PCRE2_INFO_HEAPLIMIT, &heap_limit) == 0;
+    auto const has_depth_limit = pcre2_pattern_info(c, PCRE2_INFO_DEPTHLIMIT, &depth_limit) == 0;
+    this->has_pattern_limits_  = has_heap_limit || has_depth_limit;
     return {};
   }
 
@@ -1403,7 +1420,7 @@ struct context {
   auto set_depth_limit(uint32_t const limit) -> context& {
     ensure_match_context();
     pcre2_set_depth_limit(match_ctx, limit);
-    has_jit_unsupported_limits_ = true;
+    has_match_context_limits_ = true;
     return *this;
   }
 
@@ -1414,7 +1431,7 @@ struct context {
   auto set_heap_limit(uint32_t const limit) -> context& {
     ensure_match_context();
     pcre2_set_heap_limit(match_ctx, limit);
-    has_jit_unsupported_limits_ = true;
+    has_match_context_limits_ = true;
     return *this;
   }
 
@@ -1446,17 +1463,7 @@ struct context {
     if (start > target.size()) {
       return std::unexpected{"start offset exceeds target size"};
     }
-    auto const rc = [&] -> int {
-      if constexpr (UseJIT) {
-        // heap_limit / depth_limit は pcre2_jit_match で無視されるため、
-        // 設定中は interpreter で実行して制限を確実に効かせる
-        if (jit_size_ > 0 && not has_jit_unsupported_limits_) [[likely]] {
-          return pcre2_jit_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
-        }
-        // JIT が利用可能でなかった場合・JIT 非対応の制限設定中は Interpreter を使用
-      }
-      return pcre2_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, option, data, match_ctx);
-    }();
+    auto const rc = pcre2_match(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), start, effective_match_options(option), data, match_ctx);
     if (rc >= 0) {
       return rc;
     }
@@ -1538,7 +1545,6 @@ struct context {
    * @brief 完全一致するかどうかを判定する便利メソッド
    *
    * mr が未初期化の場合は自動で初期化してから検索する。
-   * JIT は PCRE2_ENDANCHORED をサポートしないため、マッチ終端位置を手動検証する。
    *
    * @param target 判定対象の文字列
    * @param mr マッチ結果を格納するオブジェクト（未初期化でも可）
@@ -1549,8 +1555,7 @@ struct context {
     if (not mr.holder || not mr.holder->data) {
       mr = match_result{*this};
     }
-    // PCRE2_ANCHORED で先頭固定。JIT は PCRE2_ENDANCHORED 非対応のため終端を手動検証する
-    auto const rc = find(target, mr, 0uz, option | PCRE2_ANCHORED);
+    auto const rc = find(target, mr, 0uz, option | PCRE2_ANCHORED | PCRE2_ENDANCHORED);
     if (not rc) {
       return std::unexpected{rc.error()};
     }
@@ -1576,8 +1581,8 @@ struct context {
     auto buffer                        = std::string(outlen, '\0');
     auto blen                          = outlen;
     auto constexpr overflow_retry_flag = PCRE2_SUBSTITUTE_OVERFLOW_LENGTH;
-    auto const substitute_option       = option | overflow_retry_flag;
-    auto const rc = pcre2_substitute(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), 0uz, substitute_option, nullptr, nullptr, reinterpret_cast<PCRE2_SPTR8>(replacement.data()),
+    auto const substitute_option       = effective_match_options(option | overflow_retry_flag);
+    auto const rc = pcre2_substitute(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), 0uz, substitute_option, nullptr, match_ctx, reinterpret_cast<PCRE2_SPTR8>(replacement.data()),
                                      replacement.size(), reinterpret_cast<PCRE2_UCHAR8*>(buffer.data()), &blen);
     if (rc >= 0) {
       buffer.resize(blen);
@@ -1587,8 +1592,8 @@ struct context {
     auto fail_code = rc;
     if (rc == PCRE2_ERROR_NOMEMORY) {
       buffer.resize(blen);
-      auto const rc2 = pcre2_substitute(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), 0uz, substitute_option, nullptr, nullptr, reinterpret_cast<PCRE2_SPTR8>(replacement.data()),
-                                        replacement.size(), reinterpret_cast<PCRE2_UCHAR8*>(buffer.data()), &blen);
+      auto const rc2 = pcre2_substitute(code, reinterpret_cast<PCRE2_SPTR8>(target.data()), target.size(), 0uz, substitute_option, nullptr, match_ctx,
+                                        reinterpret_cast<PCRE2_SPTR8>(replacement.data()), replacement.size(), reinterpret_cast<PCRE2_UCHAR8*>(buffer.data()), &blen);
       if (rc2 >= 0) {
         buffer.resize(blen);
         return buffer;
@@ -2539,8 +2544,7 @@ auto replace_unchecked(std::string_view const target, unsigned int const option 
  * @brief NTTP 版 match：正規表現をテンプレート引数で指定する完全一致判定
  *
  * `context::match(target, option)` の NTTP 版。
- * JIT は PCRE2_ENDANCHORED をサポートしないため終端は手動検証される
- * (context::match と同じ挙動)。
+ * PCRE2_ANCHORED と PCRE2_ENDANCHORED を併用し、終端位置も防御的に検証する。
  */
 template <fixed_string Pattern, bool UseJIT = true>
 auto match(std::string_view const target, unsigned int const option = 0) -> std::expected<bool, std::string> {
