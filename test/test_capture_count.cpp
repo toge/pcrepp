@@ -40,6 +40,14 @@ TEST_CASE("constexpr capture group counting", "[capture_count]") {
   static_assert(count_capture_groups(R"([[:alpha:](a)])") == 0);
   static_assert(count_capture_groups(R"([[.ch.](a)])") == 0);
   static_assert(count_capture_groups(R"([[=a=](a)])") == 0);
+  // PCRE2 は閉じの無い POSIX 構文をリテラル '[' として扱い、裸の ']' でクラスを閉じる
+  static_assert(count_capture_groups("[[:x](a)") == 1);
+  static_assert(count_capture_groups("[[.x](a)") == 1);
+  static_assert(count_capture_groups("[[=x](a)") == 1);
+  static_assert(count_capture_groups("[[:alpha:b](x)") == 1);
+  static_assert(count_capture_groups("[[:x]:]") == 0);
+  // エスケープされた ']' は POSIX 構文の走査を止めない (PCRE2 は未知名として領域を消費する)
+  static_assert(count_capture_groups("[[:\\]x:](a)") == 0);
   static_assert(count_capture_groups(R"((?x)# (a)
 (b))") == 1);
   static_assert(count_capture_groups(R"((?xx)# (a)

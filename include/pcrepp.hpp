@@ -189,6 +189,31 @@ struct match_result;
 
 namespace detail {
   /**
+   * @brief 文字クラス内の POSIX サブクラス構文 (`[[:name:]]` 等) の閉じが存在するか判定する
+   *
+   * PCRE2 の check_posix_syntax 相当。`'['` + 種別文字 (`':'`, `'.'`, `'='`) の直後から、
+   * エスケープを読み飛ばしつつ、クラスを閉じる裸の `']'` より先に
+   * 「sub_end + `']'`」が現れる場合のみ真を返す。
+   * PCRE2 は閉じを持たない構文 (`[[:x]` 等) をリテラル `'['` として扱うため、
+   * 呼び出し側は偽のとき領域として扱わず、既存の `']'` 処理でクラスを閉じる。
+   */
+  constexpr auto has_posix_sub_class_terminator(std::string_view const pattern, size_t const begin, char const sub_end) noexcept -> bool {
+    for (auto i = begin; i < pattern.size(); ++i) {
+      if (pattern[i] == '\\') {
+        ++i;  // エスケープされた文字 (']' を含む) は構文上の ']' ではない
+        continue;
+      }
+      if (pattern[i] == ']') {
+        return false;  // 閉じより先に裸の ']': PCRE2 は '[' をリテラル扱いする
+      }
+      if (pattern[i] == sub_end && i + 1uz < pattern.size() && pattern[i + 1uz] == ']') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * @brief 正規表現パターンのキャプチャグループ数を constexpr で計算
    *
    * 開き括弧を走査し、エスケープ・文字クラス・各種拡張構文を考慮して、
@@ -211,6 +236,11 @@ namespace detail {
    * - 文字クラスおよび POSIX クラス内 `[...]` の括弧
    * - `\Q...\E` で囲われた範囲の括弧
    * - PCRE2_EXTENDED で有効な `#...` 行コメント
+   *
+   * @attention 文字クラス内の POSIX サブクラス構文 (`[[:name:]]` 等) は、
+   * 閉じ `sub_end]` がクラス内に存在する場合のみ領域として扱う。
+   * PCRE2 は閉じを持たない構文 (`[[:x]` 等) をリテラル `'['` として扱うため、
+   * その場合は既存の `']'` 処理でクラスを閉じる。
    */
   constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> size_t {
     // (?|...) ブランチリセットの状態を保持するスタック要素。
@@ -351,10 +381,15 @@ namespace detail {
           continue;
         }
         if (ch == '[' && i + 1uz < pattern.size() && (pattern[i + 1uz] == ':' || pattern[i + 1uz] == '.' || pattern[i + 1uz] == '=')) {
-          class_sub_end = pattern[i + 1uz];
-          class_start   = false;
-          ++i;
-          continue;
+          // 閉じ sub_end] が存在する場合のみ POSIX 領域として扱う。
+          // PCRE2 は閉じの無い構文をリテラル '[' として扱うため、ここで武装しなければ
+          // 既存の ']' 処理がクラスを閉じて PCRE2 と整合する。
+          if (has_posix_sub_class_terminator(pattern, i + 2uz, pattern[i + 1uz])) {
+            class_sub_end = pattern[i + 1uz];
+            class_start   = false;
+            ++i;
+            continue;
+          }
         }
         if (ch == ']' && !class_start) {
           in_class = false;

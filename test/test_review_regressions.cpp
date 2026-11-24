@@ -881,3 +881,13 @@ TEST_CASE("review: NTTP find handles no-auto-capture patterns", "[review][nttp_f
   CHECK(named->get<1>() == "ab");
   CHECK(named->get<2>() == "a");
 }
+
+TEST_CASE("review: NTTP find accepts unclosed POSIX syntax as literal class", "[review][capture_count][nttp_find]") {
+  // PCRE2 は閉じの無い [:... をリテラル '[' として扱い、裸の ']' でクラスを閉じる。
+  // constexpr カウントもこれに従うため、(a) はキャプチャ 1 として受理されなければならない。
+  auto const result = pcrepp::find<"[[:x](a)">(":a");
+  REQUIRE(result.has_value());
+  CHECK(result->matched);
+  CHECK(result->groups[0] == ":a");
+  CHECK(result->groups[1] == "a");
+}
