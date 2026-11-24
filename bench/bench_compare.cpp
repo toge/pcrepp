@@ -1,14 +1,14 @@
 /**
  * @file bench_compare.cpp
- * @brief CTRE delegation vs PCRE2 raw performance comparison
+ * @brief Direct CTRE benchmark vs PCRE2 raw performance comparison
  *
  * Compares three execution paths for the same patterns:
- *   1. pcrepp::find<Pattern>()        — NTTP, may delegate to CTRE
+ *   1. pcrepp::find<Pattern>()        — NTTP, PCRE2 only
  *   2. pcrepp::context<true>::find()  — runtime PCRE2 with JIT
  *   3. pcrepp::context<false>::find() — runtime PCRE2 without JIT
  *
  * Build:
- *   cmake -B build -DBUILD_BENCH=ON ...
+ *   cmake -B build -DPCREPP_BUILD_BENCHMARKS=ON ...
  *   cmake --build build --parallel
  *   ./build/bench/bench_main --benchmark_filter="BM_NttpFind|BM_JitFind|..."
  *
@@ -344,7 +344,7 @@ static void BM_Quick_JitMatch(benchmark::State& state) {
 BENCHMARK(BM_Quick_JitMatch);
 
 // ===================================================================
-//  直接 CTRE (CTRE フォールバック有効時のみ)
+//  直接 CTRE (ベンチマーク専用の WITH_CTRE=ON 時のみ)
 // ===================================================================
 #ifdef WITH_CTRE
 static void BM_DirectCtre_AdvMatch(benchmark::State& state) {
