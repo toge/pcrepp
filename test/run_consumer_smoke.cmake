@@ -4,10 +4,16 @@ endif()
 
 set(consumer_source_dir "${CMAKE_CURRENT_LIST_DIR}/consumer")
 get_filename_component(project_source_dir "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
-set(subproject_build_dir "${project_source_dir}/build/consumer-subproject-smoke")
-set(install_prefix "${project_source_dir}/build/consumer-install-prefix")
-set(install_build_dir "${project_source_dir}/build/consumer-install-build")
-set(installed_build_dir "${project_source_dir}/build/consumer-installed-smoke")
+if(DEFINED CONSUMER_SMOKE_ROOT AND NOT CONSUMER_SMOKE_ROOT STREQUAL "")
+  set(smoke_root "${CONSUMER_SMOKE_ROOT}")
+else()
+  set(smoke_root "${project_source_dir}/build")
+endif()
+string(SHA256 smoke_key "${project_source_dir}:${CMAKE_HOST_SYSTEM_NAME}")
+set(subproject_build_dir "${smoke_root}/consumer-subproject-smoke-${smoke_key}")
+set(install_prefix "${smoke_root}/consumer-install-prefix-${smoke_key}")
+set(install_build_dir "${smoke_root}/consumer-install-build-${smoke_key}")
+set(installed_build_dir "${smoke_root}/consumer-installed-smoke-${smoke_key}")
 
 file(REMOVE_RECURSE
   "${subproject_build_dir}"
@@ -17,7 +23,6 @@ file(REMOVE_RECURSE
 )
 
 set(_common_configure_args
-  -G Ninja
   -DCMAKE_BUILD_TYPE=Release
   -DCMAKE_TOOLCHAIN_FILE=${VCPKG_TOOLCHAIN_FILE}
   -DVCPKG_MANIFEST_MODE=ON
