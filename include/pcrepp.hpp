@@ -6,6 +6,7 @@
 #include <cstring>
 #include <expected>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -214,8 +215,9 @@ namespace detail {
    * - `(?|...)` 自身は非キャプチャ (内部の最大分岐キャプチャ数が採用される)
    * - `(?(cond)...)` / `(?R)` / `(?1)` 等の再帰・条件・部分式呼び出し
    * - エスケープされた括弧 `\(` / `\)`
-   * - 文字クラス内 `[...]` の括弧
+   * - 文字クラスおよび POSIX クラス内 `[...]` の括弧
    * - `\Q...\E` で囲われた範囲の括弧
+   * - PCRE2_EXTENDED で有効な `#...` 行コメント
    */
   constexpr auto count_capture_groups(std::string_view const pattern) noexcept -> size_t {
     // (?|...) ブランチリセットの状態を保持するスタック要素。
@@ -238,13 +240,26 @@ namespace detail {
     auto                       br_overflow_depth  = 0uz;  // br_stack 超過時の (?|...) ネスト深さ
     auto                       br_overflow_parens = 0uz;  // br_stack 超過時の内部括弧深さ
 
+    // インライングループのオプション設定を閉じ括弧で元に戻すための状態。
+    // PCRE2 のコンパイル可能な最大ネストより大きい固定容量を使い、constexpr でも
+    // 失敗パターンに対する境界外アクセスを起こさない。
+    std::array<bool, 4096uz> extended_stack{};
+    std::array<bool, 4096uz> no_capture_stack{};
+    auto                    group_depth         = 0uz;
+    auto                    extended_mode       = false;
+    auto                    no_capture_mode    = false;
+    auto                    option_overflow_depth = 0uz;
+    auto                    count_overflow        = false;
+    auto                    in_extended_comment = false;
+
     auto in_class       = false;  // [...] 内
     auto in_literal     = false;  // \Q...\E 内
     auto in_comment     = false;  // (?#...) 内
     auto in_verb        = false;  // (*VERB...) 内
     auto escaped        = false;
     auto class_start    = false;
-    auto comment_parens = 0uz;  // (?# 内 / (* 内の括弧の深さ
+    auto class_sub_end  = '\0';  // POSIX [:...:] / [. ... .] / [=...=]
+    auto comment_parens = 0uz;   // (?# 内 / (* 内の括弧の深さ
     auto verb_parens    = 0uz;
 
     auto const finalize_inner_branch_reset = [&]() -> size_t {
@@ -334,10 +349,32 @@ namespace detail {
           escaped = true;
           continue;
         }
+        if (class_sub_end != '\0') {
+          if (i + 1uz < pattern.size() && ch == class_sub_end && pattern[i + 1uz] == ']') {
+            class_sub_end = '\0';
+            class_start   = false;
+            ++i;
+          }
+          continue;
+        }
+        if (ch == '[' && i + 1uz < pattern.size() && (pattern[i + 1uz] == ':' || pattern[i + 1uz] == '.' || pattern[i + 1uz] == '=')) {
+          class_sub_end = pattern[i + 1uz];
+          class_start   = false;
+          ++i;
+          continue;
+        }
         if (ch == ']' && !class_start) {
           in_class = false;
+          class_sub_end = '\0';
         }
         class_start = false;
+        continue;
+      }
+
+      if (in_extended_comment) {
+        if (ch == '\r' || ch == '\n') {
+          in_extended_comment = false;
+        }
         continue;
       }
 
@@ -362,6 +399,10 @@ namespace detail {
         }
         continue;
       }
+      if (extended_mode && ch == '#') {
+        in_extended_comment = true;
+        continue;
+      }
 
       if (ch == '|') {
         if (br_overflow_depth > 0uz) {
@@ -374,6 +415,15 @@ namespace detail {
       }
 
       if (ch == ')') {
+        if (group_depth > 0uz) {
+          --group_depth;
+          if (option_overflow_depth > 0uz) {
+            --option_overflow_depth;
+          } else if (group_depth < extended_stack.size()) {
+            extended_mode = extended_stack[group_depth];
+            no_capture_mode = no_capture_stack[group_depth];
+          }
+        }
         if (br_overflow_depth > 0uz) {
           // オーバーフロー区間の `)` 処理: br_stack を壊さず深さだけ追跡
           if (br_overflow_parens > 0uz) {
@@ -431,6 +481,11 @@ namespace detail {
 
       // (?|...) branch reset
       if (i + 2uz < pattern.size() && pattern[i + 1uz] == '?' && pattern[i + 2uz] == '|') {
+        if (group_depth < extended_stack.size()) {
+          extended_stack[group_depth] = extended_mode;
+          no_capture_stack[group_depth] = no_capture_mode;
+        }
+        ++group_depth;
         if (br_overflow_depth > 0uz) {
           ++br_overflow_depth;  // 既にオーバーフロー中: さらに深くなった
         } else if (br_depth < br_stack.size()) {
@@ -447,10 +502,102 @@ namespace detail {
         continue;
       }
 
+      // (?x), (?-x), (?xx), (?i-x) 等のオプション設定。
+      // 終端 ')' の設定は物理的な入れ子グループを作らず、
+      // 終端 ':' の設定はこの後の通常グループ開始処理へ渡す。
+      auto option_scope         = false;
+      auto option_extended_mode = extended_mode;
+      auto option_no_capture_mode = no_capture_mode;
+      auto option_valid         = i + 1uz < pattern.size() && pattern[i + 1uz] == '?';
+      if (option_valid) {
+        auto p             = i + 2uz;
+        auto after_hyphen  = false;
+        auto has_hyphen    = false;
+        auto reset_options = false;
+        if (p < pattern.size() && pattern[p] == '^') {
+          reset_options        = true;
+          option_extended_mode = false;
+          option_no_capture_mode = false;
+          ++p;
+        }
+        while (p < pattern.size() && pattern[p] != ')' && pattern[p] != ':') {
+          auto const option = pattern[p];
+          if (option == '-') {
+            if (has_hyphen || reset_options) {
+              option_valid = false;
+              break;
+            }
+            has_hyphen   = true;
+            after_hyphen = true;
+            ++p;
+            continue;
+          }
+
+          auto recognized = true;
+          switch (option) {
+          case 'i':
+          case 'm':
+          case 'r':
+          case 's':
+          case 'J':
+          case 'U':
+            ++p;
+            break;
+          case 'n':
+            option_no_capture_mode = !after_hyphen;
+            ++p;
+            break;
+          case 'x':
+            option_extended_mode = !after_hyphen;
+            ++p;
+            break;
+          case 'a':
+            ++p;
+            if (p < pattern.size() && (pattern[p] == 'D' || pattern[p] == 'P' || pattern[p] == 'S' || pattern[p] == 'T' || pattern[p] == 'W')) {
+              ++p;
+            }
+            break;
+          default:
+            recognized = false;
+            break;
+          }
+          if (not recognized) {
+            option_valid = false;
+            break;
+          }
+        }
+        if (option_valid && p < pattern.size() && (pattern[p] == ')' || pattern[p] == ':')) {
+          if (pattern[p] == ')') {
+            extended_mode = option_extended_mode;
+            no_capture_mode = option_no_capture_mode;
+            i             = p;
+            continue;
+          }
+          option_scope = true;
+        } else {
+          option_valid = false;
+        }
+      }
+
+      if (group_depth < extended_stack.size()) {
+        extended_stack[group_depth] = extended_mode;
+        no_capture_stack[group_depth] = no_capture_mode;
+      }
+      ++group_depth;
+      if (option_scope) {
+        if (group_depth >= extended_stack.size()) {
+          option_overflow_depth = 1uz;
+          count_overflow        = true;
+          no_capture_mode       = false;
+        }
+        extended_mode = option_extended_mode;
+        no_capture_mode = option_no_capture_mode;
+      }
+
       // キャプチャ判定
       auto is_capture = false;
       if (i + 1uz >= pattern.size() || pattern[i + 1uz] != '?') {
-        is_capture = true;
+        is_capture = not no_capture_mode;
       } else {
         // (?...) 系: 名前付きキャプチャなら true
         if (i + 2uz < pattern.size()) {
@@ -502,7 +649,7 @@ namespace detail {
       capture_count += pending;
     }
 
-    return capture_count;
+    return count_overflow ? 0uz : capture_count;
   }
 
   /**
@@ -641,6 +788,18 @@ namespace detail {
     // 長い名前はヒープで
     auto owned = std::string{name};
     return pcre2_substring_number_from_name(code, reinterpret_cast<PCRE2_SPTR8>(owned.c_str()));
+  }
+
+  inline auto checked_ovector_view(size_t const* const ovector, size_t const ovector_count, size_t const index, std::string_view const target) noexcept -> std::string_view {
+    if (not ovector || index >= ovector_count) {
+      return {};
+    }
+    auto const s = ovector[index * 2uz];
+    auto const e = ovector[index * 2uz + 1uz];
+    if (s == PCRE2_UNSET || e == PCRE2_UNSET || s > e || e > target.size()) {
+      return {};
+    }
+    return target.substr(s, e - s);
   }
 }  // namespace detail
 
@@ -917,24 +1076,8 @@ struct match_result {
   auto start_pos() const noexcept -> size_t { return static_cast<bool>(*this) ? holder->ovector[0] : 0uz; }
   auto end_pos() const noexcept -> size_t { return static_cast<bool>(*this) ? holder->ovector[1] : 0uz; }
 
-  /// @brief インデックスがコンパイル時に確定している経路用の範囲チェックなし取得
-  ///
-  /// `detail::match_result_to_tuple_impl` は `Is < N`（N はパターンの
-  /// `count_capture_groups` から確定）が静的保証されるため安全。
-  auto get_view_unchecked(size_t const index) const noexcept -> std::string_view {
-    if (not static_cast<bool>(*this)) {
-      return {};  // デフォルト構築 (未マッチ) の match_result からの呼び出しに備える
-    }
-    auto const s = holder->ovector[index * 2uz + 0uz];
-    auto const e = holder->ovector[index * 2uz + 1uz];
-    if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
-      return {};
-    }
-    if (s > holder->target.size()) {
-      return {};
-    }
-    return holder->target.substr(s, e - s);
-  }
+  /// @brief コンパイル時インデックス用の取得。実行時境界検査は省略しない
+  auto get_view_unchecked(size_t const index) const noexcept -> std::string_view { return get_view(index); }
 
   private:
   /**
@@ -965,37 +1108,25 @@ struct match_result {
   }
 
   auto try_get_view(size_t const index) const noexcept -> std::optional<std::string_view> {
-    if (not static_cast<bool>(*this))
+    if (not static_cast<bool>(*this) || not holder->ovector) {
       return std::nullopt;
+    }
     if (index >= holder->ovector_count)
       return std::nullopt;
     auto const s = holder->ovector[index * 2uz];
     auto const e = holder->ovector[index * 2uz + 1uz];
     if (s == PCRE2_UNSET || e == PCRE2_UNSET)
       return std::nullopt;
-    if (s > e)
-      return std::nullopt;
-    if (s > holder->target.size())
+    if (s > e || e > holder->target.size())
       return std::nullopt;
     return holder->target.substr(s, e - s);
   }
 
   auto get_view(size_t const index) const noexcept -> std::string_view {
-    if (not static_cast<bool>(*this)) {
+    if (not static_cast<bool>(*this) || not holder->ovector) {
       return {};
     }
-    if (index >= holder->ovector_count) {
-      return {};
-    }
-    auto const s = holder->ovector[index * 2uz + 0uz];
-    auto const e = holder->ovector[index * 2uz + 1uz];
-    if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
-      return {};
-    }
-    if (s > e || s > holder->target.size()) {
-      return {};
-    }
-    return holder->target.substr(s, e - s);
+    return detail::checked_ovector_view(holder->ovector, holder->ovector_count, index, holder->target);
   }
 
   explicit match_result(std::shared_ptr<pcre2_code> const& code_owner) {
@@ -1041,8 +1172,6 @@ namespace detail {
    */
   template <size_t N, size_t... Is>
   auto match_result_to_tuple_impl(match_result const& mr, std::index_sequence<Is...>) noexcept -> nttp_match_tuple_t<N> {
-    // Is はすべて N 未満であることが静的保証されるため、get_view の範囲チェックを
-    // スキップする unchecked 版を使用する（NTTP find_all のホットパス）。
     return std::make_tuple(mr.get_view_unchecked(Is)...);
   }
 
@@ -1802,23 +1931,25 @@ namespace detail {
   template <fixed_string Pattern, bool UseJIT, size_t... Is>
   auto make_nttp_result_raw_impl(pcre2_match_data* const md, std::string_view const target, std::index_sequence<Is...>) -> nttp_find_result_t<Pattern, UseJIT> {
     auto const* ovector  = pcre2_get_ovector_pointer(md);
-    auto const  count    = pcre2_get_ovector_count(md);
-    auto const  get_view = [&](size_t const i) -> std::string_view {
-      if (i >= count) {
-        return {};
-      }
-      auto const s = ovector[i * 2uz + 0uz];
-      auto const e = ovector[i * 2uz + 1uz];
-      if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
-        return {};
-      }
-      return target.substr(s, e - s);
-    };
+    auto const  count    = static_cast<size_t>(pcre2_get_ovector_count(md));
+    auto const  get_view = [&](size_t const i) -> std::string_view { return checked_ovector_view(ovector, count, i, target); };
     return {.matched = true, .groups = {get_view(Is)...}};
   }
 
   template <fixed_string Pattern, bool UseJIT>
-  auto make_nttp_result_raw(pcre2_match_data* const md, std::string_view const target) -> nttp_find_result_t<Pattern, UseJIT> {
+  auto make_nttp_result_raw(pcre2_match_data* const md, std::string_view const target, size_t const runtime_capture_count) -> std::expected<nttp_find_result_t<Pattern, UseJIT>, std::string> {
+    auto constexpr compile_time_groups = nttp_group_count_v<Pattern>;
+    if (runtime_capture_count != compile_time_groups - 1uz) {
+      return std::unexpected{"NTTP find: compile-time capture count " + std::to_string(compile_time_groups - 1uz) + " differs from runtime capture count " + std::to_string(runtime_capture_count)};
+    }
+    if (not md) {
+      return std::unexpected{"NTTP find: match data is null"};
+    }
+    auto const* ovector       = pcre2_get_ovector_pointer(md);
+    auto const  ovector_count = static_cast<size_t>(pcre2_get_ovector_count(md));
+    if (not ovector || ovector_count < compile_time_groups) {
+      return std::unexpected{"NTTP find: match data ovector is too small for runtime capture count"};
+    }
     return make_nttp_result_raw_impl<Pattern, UseJIT>(md, target, std::make_index_sequence<nttp_group_count_v<Pattern>>{});
   }
 
@@ -2141,9 +2272,6 @@ namespace detail {
     kind_t           kind;
     size_t           number;  ///< capture_number 用 (capture_name では未使用)
     std::string_view text;    ///< literal 用テキスト / capture_name 用の名前
-
-    /// @brief 番号がキャプチャ数上限を超えた際の飽和値 (フォールバック判定用)
-    static constexpr auto saturated = ~size_t{0};
   };
 
   /**
@@ -2205,9 +2333,12 @@ namespace detail {
           return true;
         }();
         if (all_digits) {
-          // 飽和加算: 巨大数字のオーバーフローで誤って有効番号にならないようにする
           for (auto const c : content) {
-            number = number > nttp_repl_token::saturated / 10uz ? nttp_repl_token::saturated : number * 10uz + static_cast<size_t>(c - '0');
+            auto const digit = static_cast<size_t>(c - '0');
+            if (number > (std::numeric_limits<size_t>::max() - digit) / 10uz) {
+              return false;
+            }
+            number = number * 10uz + digit;
           }
           visit(nttp_repl_token::kind_t::capture_number, number, {});
         } else {
@@ -2220,7 +2351,11 @@ namespace detail {
         auto number = 0uz;
         auto k      = j + 1uz;
         while (k < repl.size() && is_digit(repl[k])) {
-          number = number > nttp_repl_token::saturated / 10uz ? nttp_repl_token::saturated : number * 10uz + static_cast<size_t>(repl[k] - '0');
+          auto const digit = static_cast<size_t>(repl[k] - '0');
+          if (number > (std::numeric_limits<size_t>::max() - digit) / 10uz) {
+            return false;
+          }
+          number = number * 10uz + digit;
           ++k;
         }
         visit(nttp_repl_token::kind_t::capture_number, number, {});
@@ -2351,16 +2486,21 @@ auto find(std::string_view const target, size_t const start = 0uz, unsigned int 
     if (not ctx_res) {
       return std::unexpected{ctx_res.error()};
     }
-    auto const* ctx_ptr = *ctx_res;
-    auto*       md      = detail::get_tls_match_data(ctx_ptr->get_code());
-    auto const  res     = ctx_ptr->find(target, md, start, option);
+    auto const* ctx_ptr               = *ctx_res;
+    auto const  runtime_capture_count = static_cast<size_t>(ctx_ptr->capture_count());
+    if (runtime_capture_count != nttp_group_count_v<Pattern> - 1uz) {
+      return std::unexpected{"NTTP find: compile-time capture count " + std::to_string(nttp_group_count_v<Pattern> - 1uz) + " differs from runtime capture count " +
+                             std::to_string(runtime_capture_count)};
+    }
+    auto*      md  = detail::get_tls_match_data(ctx_ptr->get_code());
+    auto const res = ctx_ptr->find(target, md, start, option);
     if (not res) {
       return std::unexpected{res.error()};
     }
     if (*res <= 0) {
       return nttp_find_result_t<Pattern, UseJIT>{};
     }
-    return detail::make_nttp_result_raw<Pattern, UseJIT>(md, target);
+    return detail::make_nttp_result_raw<Pattern, UseJIT>(md, target, runtime_capture_count);
   }
 }
 
@@ -2482,6 +2622,11 @@ auto replace(std::string_view const target, unsigned int const option = PCRE2_SU
       return std::unexpected{ctx_res.error()};
     }
     auto const* ctx_ptr = *ctx_res;
+    auto const  runtime_capture_count         = static_cast<size_t>(ctx_ptr->capture_count());
+    auto constexpr compile_time_capture_count = detail::count_capture_groups(Pattern.view());
+    if (runtime_capture_count != compile_time_capture_count) {
+      return replace<Pattern, UseJIT>(target, Replacement.view(), option);
+    }
 
     // 名前付きキャプチャを番号に解決 (プロセス内で 1 回)。失敗時はランタイム経路へ委譲。
     static auto const plan = [&] {
@@ -2491,17 +2636,22 @@ auto replace(std::string_view const target, unsigned int const option = PCRE2_SU
       };
       auto p   = plan_t{};
       p.tokens = scan_t::build_tokens();
+      p.valid  = static_cast<size_t>(ctx_ptr->capture_count()) == compile_time_capture_count;
       for (auto& tk : p.tokens) {
-        if (tk.kind != dr::nttp_repl_token::kind_t::capture_name) {
+        if (tk.kind == dr::nttp_repl_token::kind_t::capture_name) {
+          auto const ix = ctx_ptr->capture_index(tk.text);
+          if (ix < 0 || static_cast<size_t>(ix) > static_cast<size_t>(ctx_ptr->capture_count())) {
+            p.valid = false;
+            break;
+          }
+          tk.kind   = dr::nttp_repl_token::kind_t::capture_number;
+          tk.number = static_cast<size_t>(ix);
           continue;
         }
-        auto const ix = ctx_ptr->capture_index(tk.text);
-        if (ix < 0) {
+        if (tk.kind == dr::nttp_repl_token::kind_t::capture_number && tk.number > static_cast<size_t>(ctx_ptr->capture_count())) {
           p.valid = false;
           break;
         }
-        tk.kind   = dr::nttp_repl_token::kind_t::capture_number;
-        tk.number = static_cast<size_t>(ix);
       }
       return p;
     }();
@@ -2517,6 +2667,9 @@ auto replace(std::string_view const target, unsigned int const option = PCRE2_SU
     auto constexpr application_options = 0u;
     auto  iteration_options            = 0u;
     auto* md                           = detail::get_tls_match_data(ctx_ptr->get_code());
+    if (not md || not pcre2_get_ovector_pointer(md) || static_cast<size_t>(pcre2_get_ovector_count(md)) <= runtime_capture_count) {
+      return replace<Pattern, UseJIT>(target, Replacement.view(), option);
+    }
     while (true) {
       auto const rc = ctx_ptr->find(target, md, search_pos, application_options | iteration_options);
       if (not rc) {
@@ -2525,32 +2678,43 @@ auto replace(std::string_view const target, unsigned int const option = PCRE2_SU
       if (*rc <= 0) {
         break;
       }
-      auto        next_pos     = PCRE2_SIZE{};
-      auto        next_options = uint32_t{};
-      auto const  has_next     = is_global && pcre2_next_match(md, &next_pos, &next_options) != 0;
-      auto const* ov    = pcre2_get_ovector_pointer(md);
-      auto const  start = ov[0];
-      auto const  end   = ov[1];
+      auto const* ov            = pcre2_get_ovector_pointer(md);
+      auto const  ovector_count = static_cast<size_t>(pcre2_get_ovector_count(md));
+      if (not ov || ovector_count <= runtime_capture_count) {
+        return std::unexpected{"NTTP replace: malformed live match data ovector"};
+      }
+      auto const start = ov[0];
+      auto const end   = ov[1];
+      if (start == PCRE2_UNSET || end == PCRE2_UNSET || append_pos > start || start > end || end > target.size()) {
+        return std::unexpected{"NTTP replace: malformed live whole-match offsets"};
+      }
       out.append(target.substr(append_pos, start - append_pos));
       for (auto const& tk : plan.tokens) {
         if (tk.kind == dr::nttp_repl_token::kind_t::literal) {
           out.append(tk.text);
           continue;
         }
+        if (tk.number >= ovector_count || tk.number > runtime_capture_count) {
+          return std::unexpected{"NTTP replace: malformed capture reference"};
+        }
         auto const s = ov[tk.number * 2uz];
         auto const e = ov[tk.number * 2uz + 1uz];
         if (s == PCRE2_UNSET || e == PCRE2_UNSET) {
-          // デフォルトオプションの pcre2_substitute と同様にエラー扱い
-          return std::unexpected{"NTTP replace: requested value is not set"};
+          // 未設定グループのエラーは PCRE2 本体の文脈込みで返す。
+          return replace<Pattern, UseJIT>(target, Replacement.view(), option);
         }
-        if (s <= target.size() && s <= e) {
-          out.append(target.substr(s, e - s));
+        if (s > e || e > target.size()) {
+          return std::unexpected{"NTTP replace: malformed live capture offsets"};
         }
+        out.append(target.substr(s, e - s));
       }
       append_pos = end;
       if (!is_global) {
         break;  // 非グローバル置換: 最初の 1 件のみ
       }
+      auto       next_pos     = PCRE2_SIZE{};
+      auto       next_options = uint32_t{};
+      auto const has_next     = pcre2_next_match(md, &next_pos, &next_options) != 0;
       if (not has_next) {
         break;
       }

@@ -1,5 +1,6 @@
 #include "pcrepp.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -86,6 +87,17 @@ TEST_CASE("review: match_result keeps compiled code alive", "[review][match_resu
   CHECK(static_cast<bool>(tls));
   CHECK(tls.get(1uz) == "a");
   CHECK(tls.get("v") == "a");
+}
+
+TEST_CASE("review: match_result tuple conversion bounds-checks oversized tuples", "[review][match_result][oob]") {
+  auto const result = pcrepp::context<>::create(R"((a))").value().find("a");
+  REQUIRE(result);
+  REQUIRE(*result);
+
+  auto const tuple = result->to_tuple<3uz>();
+  CHECK(std::get<0uz>(tuple) == "a");
+  CHECK(std::get<1uz>(tuple) == "a");
+  CHECK(std::get<2uz>(tuple).empty());
 }
 
 TEST_CASE("review: existing result cannot be reused across contexts", "[review][match_result]") {
@@ -616,4 +628,186 @@ TEST_CASE("review: custom JIT flags propagate through find_all range", "[review]
     matches.push_back(result[0]);
   }
   CHECK(matches == std::vector<std::string_view>{"aa", "bb"});
+}
+
+TEST_CASE("review: NTTP capture parser handles extended comments and POSIX classes", "[review][capture_count][nttp_replace]") {
+  using pcrepp::detail::count_capture_groups;
+
+  CHECK(count_capture_groups("(?x)# (ignored)\n(a)") == 1uz);
+  CHECK(count_capture_groups("(?x:# (ignored)\n(a))") == 1uz);
+  CHECK(count_capture_groups(R"([[:alpha:](a)])") == 0uz);
+  CHECK(count_capture_groups(R"((?n)(a)(b))") == 0uz);
+  CHECK(count_capture_groups(R"((?n)(?<name>a)(b))") == 1uz);
+  CHECK(count_capture_groups(R"((?n:(a)(b))") == 0uz);
+  CHECK(count_capture_groups(R"((?n:(?<name>a)))") == 1uz);
+
+  auto deep = std::string{};
+  deep.reserve(2048uz);
+  for (auto const i : std::views::iota(0, 50)) {
+    (void)i;
+    deep += "(?:";
+  }
+  deep += "(?n:(a))";
+  for (auto const i : std::views::iota(0, 50)) {
+    (void)i;
+    deep += ')';
+  }
+  auto deep_context = pcrepp::context<false>::create(deep);
+  REQUIRE(deep_context);
+  CHECK(count_capture_groups(deep) == deep_context->capture_count());
+
+  auto const inline_fast   = pcrepp::replace<R"((?x)# (ignored)
+(a))",
+                                             "$1">("a");
+  auto const inline_normal = pcrepp::replace<R"((?x)# (ignored)
+(a))">("a", "$1");
+  REQUIRE(inline_fast);
+  REQUIRE(inline_normal);
+  CHECK(*inline_fast == *inline_normal);
+  CHECK(*inline_fast == "a");
+
+  auto const scoped_fast   = pcrepp::replace<R"((?x:# (ignored)
+(a)))",
+                                             "$1">("a");
+  auto const scoped_normal = pcrepp::replace<R"((?x:# (ignored)
+(a)))">("a", "$1");
+  REQUIRE(scoped_fast);
+  REQUIRE(scoped_normal);
+  CHECK(*scoped_fast == *scoped_normal);
+  CHECK(*scoped_fast == "a");
+}
+
+TEST_CASE("review: NTTP fast replacement matches PCRE2 for POSIX class parentheses", "[review][nttp_replace][fast]") {
+  auto const normal = pcrepp::replace<R"([[:alpha:](a)])">("x", "$1");
+  auto const fast   = pcrepp::replace<R"([[:alpha:](a)])", "$1">("x");
+
+  CHECK(fast.has_value() == normal.has_value());
+  if (fast.has_value() && normal.has_value()) {
+    CHECK(*fast == *normal);
+  }
+  CHECK_FALSE(normal);
+  if (not fast.has_value() && not normal.has_value()) {
+    CHECK(fast.error() == normal.error());
+  }
+}
+
+TEST_CASE("review: NTTP replacement reference overflow falls back to PCRE2", "[review][nttp_replace][overflow]") {
+  auto const normal_overflow = pcrepp::replace<R"((a))">("a", "$18446744073709551616");
+  auto const fast_overflow   = pcrepp::replace<R"((a))", "$18446744073709551616">("a");
+
+  CHECK(fast_overflow.has_value() == normal_overflow.has_value());
+  if (fast_overflow.has_value() && normal_overflow.has_value()) {
+    CHECK(*fast_overflow == *normal_overflow);
+  }
+  CHECK_FALSE(normal_overflow);
+  if (not fast_overflow.has_value() && not normal_overflow.has_value()) {
+    CHECK(fast_overflow.error() == normal_overflow.error());
+  }
+
+  auto const verify_size_max = [] {
+    if constexpr (std::numeric_limits<size_t>::digits == 64) {
+      auto const normal = pcrepp::replace<R"((a))">("a", "$18446744073709551615");
+      auto const fast   = pcrepp::replace<R"((a))", "$18446744073709551615">("a");
+      CHECK(fast.has_value() == normal.has_value());
+      if (fast.has_value() && normal.has_value()) {
+        CHECK(*fast == *normal);
+      }
+      CHECK_FALSE(normal);
+      if (not fast.has_value() && not normal.has_value()) {
+        CHECK(fast.error() == normal.error());
+      }
+    } else {
+      auto const normal = pcrepp::replace<R"((a))">("a", "$4294967295");
+      auto const fast   = pcrepp::replace<R"((a))", "$4294967295">("a");
+      CHECK(fast.has_value() == normal.has_value());
+      if (fast.has_value() && normal.has_value()) {
+        CHECK(*fast == *normal);
+      }
+      CHECK_FALSE(normal);
+      if (not fast.has_value() && not normal.has_value()) {
+        CHECK(fast.error() == normal.error());
+      }
+    }
+  };
+  verify_size_max();
+}
+
+TEST_CASE("review: NTTP fast replacement preserves fallback errors", "[review][nttp_replace][fast]") {
+  SECTION("malformed reference") {
+    auto const normal = pcrepp::replace<R"((a))">("a", "X$");
+    auto const fast   = pcrepp::replace<R"((a))", "X$">("a");
+    CHECK(fast.has_value() == normal.has_value());
+    if (fast.has_value() && normal.has_value()) {
+      CHECK(*fast == *normal);
+    }
+    CHECK_FALSE(normal);
+    if (not fast.has_value() && not normal.has_value()) {
+      CHECK(fast.error() == normal.error());
+    }
+  }
+
+  SECTION("unset group") {
+    auto const normal = pcrepp::replace<R"((x)?y)">("y", "<$1>");
+    auto const fast   = pcrepp::replace<R"((x)?y)", "<$1>">("y");
+    CHECK(fast.has_value() == normal.has_value());
+    if (fast.has_value() && normal.has_value()) {
+      CHECK(*fast == *normal);
+    }
+    CHECK_FALSE(normal);
+    if (not fast.has_value() && not normal.has_value()) {
+      CHECK(fast.error() == normal.error());
+    }
+  }
+
+  SECTION("unknown name") {
+    auto const normal = pcrepp::replace<R"((?<known>a))">("a", "$missing");
+    auto const fast   = pcrepp::replace<R"((?<known>a))", "$missing">("a");
+    CHECK(fast.has_value() == normal.has_value());
+    if (fast.has_value() && normal.has_value()) {
+      CHECK(*fast == *normal);
+    }
+    CHECK_FALSE(normal);
+    if (not fast.has_value() && not normal.has_value()) {
+      CHECK(fast.error() == normal.error());
+    }
+  }
+
+  SECTION("out-of-range number") {
+    auto const normal = pcrepp::replace<R"((a))">("a", "$2");
+    auto const fast   = pcrepp::replace<R"((a))", "$2">("a");
+    CHECK(fast.has_value() == normal.has_value());
+    if (fast.has_value() && normal.has_value()) {
+      CHECK(*fast == *normal);
+    }
+    CHECK_FALSE(normal);
+    if (not fast.has_value() && not normal.has_value()) {
+      CHECK(fast.error() == normal.error());
+    }
+  }
+
+  SECTION("compile-time capture shape mismatch") {
+    auto const normal = pcrepp::replace<R"((?n)(a))">("a", "$1");
+    auto const fast   = pcrepp::replace<R"((?n)(a))", "$1">("a");
+    CHECK(fast.has_value() == normal.has_value());
+    if (fast.has_value() && normal.has_value()) {
+      CHECK(*fast == *normal);
+    }
+    CHECK_FALSE(normal);
+    if (not fast.has_value() && not normal.has_value()) {
+      CHECK(fast.error() == normal.error());
+    }
+  }
+}
+
+TEST_CASE("review: NTTP find handles no-auto-capture patterns", "[review][nttp_find][capture_count]") {
+  auto const unnamed = pcrepp::find<R"((?n)(a))">("a");
+  REQUIRE(unnamed);
+  CHECK(unnamed->matched);
+  CHECK(unnamed->groups.size() == 1uz);
+
+  auto const named = pcrepp::find<R"((?n)(?<name>a)(b))">("ab");
+  REQUIRE(named);
+  CHECK(named->matched);
+  CHECK(named->get<1>() == "ab");
+  CHECK(named->get<2>() == "a");
 }

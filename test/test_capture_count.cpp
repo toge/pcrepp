@@ -34,6 +34,34 @@ TEST_CASE("constexpr capture group counting", "[capture_count]") {
   // 文字クラス内の \Q...\E
   static_assert(count_capture_groups(R"([\Q(a)\E](b))") == 1);
 
+  // PCRE2_EXTENDED コメントと POSIX 文字クラス内の括弧
+  static_assert(count_capture_groups("(?x)# (ignored)\n(a)") == 1);
+  static_assert(count_capture_groups("(?x:# (ignored)\n(a))") == 1);
+  static_assert(count_capture_groups(R"([[:alpha:](a)])") == 0);
+  static_assert(count_capture_groups(R"([[.ch.](a)])") == 0);
+  static_assert(count_capture_groups(R"([[=a=](a)])") == 0);
+  static_assert(count_capture_groups(R"((?x)# (a)
+(b))") == 1);
+  static_assert(count_capture_groups(R"((?xx)# (a)
+(b))") == 1);
+  static_assert(count_capture_groups(R"((?x)\#(a))") == 1);
+  static_assert(count_capture_groups(R"((?x)[#(a)](b))") == 1);
+  static_assert(count_capture_groups(R"((?x)# ignored
+(a)(?-x)#(b))") == 2);
+  static_assert(count_capture_groups(R"((?x:(?-x)# (a))#(b))") == 2);
+  static_assert(count_capture_groups(R"((?n)(a)(b))") == 0);
+  static_assert(count_capture_groups(R"((?n)(?<name>a)(b))") == 1);
+  static_assert(count_capture_groups(R"((?n:(a)(b))") == 0);
+  static_assert(count_capture_groups(R"((?n:(?<name>a)))") == 1);
+  static_assert(count_capture_groups(R"((?i)(a)(b))") == 2);
+  static_assert(count_capture_groups(R"((?m)(a)(b))") == 2);
+  static_assert(count_capture_groups(R"((?r)(a)(b))") == 2);
+  static_assert(count_capture_groups(R"((?s)(a)(b))") == 2);
+  static_assert(count_capture_groups(R"((?J)(a)(b))") == 2);
+  static_assert(count_capture_groups(R"((?U)(a)(b))") == 2);
+  static_assert(count_capture_groups(R"((?n)(?^)(a)(b))") == 2);
+  static_assert(count_capture_groups(R"((?n:(?^)(a)(b))") == 2);
+
   // branch reset (?|...) 内の最大キャプチャ数
   static_assert(count_capture_groups(R"((?|(a)(b)|(c)(d)))") == 2);
   static_assert(count_capture_groups(R"((?|(a)|(b)(c)))") == 2);
