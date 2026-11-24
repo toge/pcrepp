@@ -15,4 +15,3 @@ endif()
 add_executable(consumer_smoke main.cpp)
 target_link_libraries(consumer_smoke PRIVATE pcrepp::pcrepp)
 target_compile_features(consumer_smoke PRIVATE cxx_std_23)
-
