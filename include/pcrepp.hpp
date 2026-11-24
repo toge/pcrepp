@@ -42,10 +42,6 @@
 #define PCREPP_HAS_FROZENCHARS
 #endif
 
-#ifdef WITH_CTRE
-#include <ctre.hpp>
-#endif
-
 #include "fast_float/fast_float.h"
 
 // 文字列リテラル NTTP（find<"a+"> など）との曖昧性回避のため、
@@ -58,12 +54,9 @@
 #include "pcre2.h"
 
 // Security: pcrepp requires PCRE2 >= 10.49.
-// Older releases are affected by multiple CVEs reachable when compiling
-// attacker-controlled patterns, including JIT code-generation flaws
-// (CVE-2026-103111) and integer overflows in the compiler (CVE-2026-89158,
-// CVE-2026-89156). pcrepp uses pcre2_jit_compile by default, so the JIT
-// flaws apply directly. See Ruby's analogous Onigmo CVEs (CVE-2026-89078,
-// CVE-2026-93577, CVE-2026-97229, CVE-2026-110264) for the same class.
+// 10.49 には複数の upstream セキュリティ修正 (JIT/compile 系を含む) が含まれる。
+// 特に growable JIT stack (pcre2_jit_stack_create/assign) を併用する実装では
+// 影響範囲が広がるため、ライブラリ利用側でも 10.49 以降を前提にする。
 #if !defined(PCRE2_MAJOR) || !defined(PCRE2_MINOR) || \
     (PCRE2_MAJOR < 10) || (PCRE2_MAJOR == 10 && PCRE2_MINOR < 49)
 #error "pcrepp requires PCRE2 >= 10.49 (security fixes). Upgrade your PCRE2 installation."
@@ -1988,270 +1981,6 @@ namespace detail {
     return 0;
   }
 
-#ifdef WITH_CTRE
-  /**
-   * @brief パターンが CTRE で処理すべきか constexpr 判定
-   *
-   * CTRE は可変長 lookbehind (`(?<=…{2,})` / `(?<!…+)`) のように
-   * PCRE2 がコンパイルできないパターンを処理するために使う。
-   * 高速化のための委譲は行わない (PCRE2 の JIT 最適化の方が十分速い)。
-   *
-   * CTRE 推奨条件:
-   * - `(?<=...quantifier)` / `(?<!...quantifier)`: CTRE 推奨 (可変長 lookbehind)
-   *
-   * PCRE2 強制 (CTRE 非対応):
-   * - `\1`-`\9` : 後方参照
-   * - `(?R)` / `(?&` / `(?P>` / `(?0)` : 再帰
-   * - `(?(` : 条件分岐
-   */
-  constexpr auto ctre_recommended(std::string_view const pattern) noexcept -> bool {
-    auto in_class       = false;
-    auto in_literal     = false;
-    auto in_comment     = false;
-    auto in_verb        = false;
-    auto escaped        = false;
-    auto class_start    = false;
-    auto comment_parens = 0uz;
-    auto verb_parens    = 0uz;
-
-    auto depth                  = 0uz;
-    auto in_lookbehind          = false;
-    auto lookbehind_inner_depth = 0uz;  // ルックビハインド内部の括弧ネスト深さ
-    auto has_var_lookbehind     = false;
-    auto has_backref_or_recurse = false;
-
-    for (auto i = 0uz; i < pattern.size(); ++i) {
-      auto const ch = pattern[i];
-
-      // (?#comment) 内
-      if (in_comment) {
-        if (escaped) {
-          escaped = false;
-          continue;
-        }
-        if (ch == '\\') {
-          escaped = true;
-          continue;
-        }
-        if (ch == '(') {
-          ++comment_parens;
-          continue;
-        }
-        if (ch == ')') {
-          if (comment_parens == 0uz) {
-            in_comment = false;
-          } else {
-            --comment_parens;
-          }
-        }
-        continue;
-      }
-
-      // (*VERB) 内
-      if (in_verb) {
-        if (escaped) {
-          escaped = false;
-          continue;
-        }
-        if (ch == '\\') {
-          escaped = true;
-          continue;
-        }
-        if (ch == '(') {
-          ++verb_parens;
-          continue;
-        }
-        if (ch == ')') {
-          if (verb_parens == 0uz) {
-            in_verb = false;
-          } else {
-            --verb_parens;
-          }
-        }
-        continue;
-      }
-
-      // \Q...\E 内
-      if (in_literal) {
-        if (ch == '\\' && i + 1uz < pattern.size() && pattern[i + 1uz] == 'E') {
-          ++i;
-          in_literal = false;
-        }
-        continue;
-      }
-
-      // [...] 内
-      if (in_class) {
-        if (escaped) {
-          escaped     = false;
-          class_start = false;
-          continue;
-        }
-        if (ch == '\\') {
-          class_start = false;
-          if (i + 1uz < pattern.size() && pattern[i + 1uz] == 'Q') {
-            in_literal = true;
-            ++i;
-            continue;
-          }
-          escaped = true;
-          continue;
-        }
-        if (ch == ']' && !class_start) {
-          in_class = false;
-        }
-        class_start = false;
-        continue;
-      }
-
-      // 通常モード
-      if (escaped) {
-        escaped = false;
-        if (!has_backref_or_recurse && ch >= '1' && ch <= '9') {
-          has_backref_or_recurse = true;
-        }
-        continue;
-      }
-      if (ch == '\\') {
-        escaped = true;
-        continue;
-      }
-      if (ch == '[') {
-        in_class    = true;
-        class_start = true;
-        if (i + 1uz < pattern.size() && pattern[i + 1uz] == '^') {
-          ++i;
-        }
-        continue;
-      }
-
-      // 量化子が可変長 lookbehind 内にある → CTRE 推奨
-      if (ch == '*' || ch == '+' || ch == '?') {
-        if (in_lookbehind) {
-          has_var_lookbehind = true;
-        }
-        continue;
-      }
-      if (ch == '{') {
-        if (in_lookbehind) {
-          for (auto j = i + 1uz; j < pattern.size(); ++j) {
-            auto const nc = pattern[j];
-            if (nc == '}')
-              break;
-            if (nc == ',') {
-              has_var_lookbehind = true;
-              break;
-            }
-            if (nc < '0' || nc > '9')
-              break;
-          }
-        }
-        continue;
-      }
-
-      // 再帰・条件判定
-      if (ch == '(' && i + 1uz < pattern.size()) {
-        auto const was_in_lookbehind = in_lookbehind;  // (?<= 自体の ( では増やさないため保存
-        auto const next              = pattern[i + 1uz];
-        if (next == '?') {
-          if (i + 2uz < pattern.size()) {
-            auto const m2 = pattern[i + 2uz];
-            if (m2 == 'R') {
-              has_backref_or_recurse = true;
-            } else if (m2 == '&') {
-              has_backref_or_recurse = true;
-            } else if (m2 == 'P' && i + 3uz < pattern.size() && pattern[i + 3uz] == '>') {
-              has_backref_or_recurse = true;
-            } else if (m2 == '0') {
-              has_backref_or_recurse = true;
-            } else if (m2 == '(') {
-              has_backref_or_recurse = true;
-            } else if (m2 == '<') {
-              if (i + 3uz < pattern.size()) {
-                auto const m3 = pattern[i + 3uz];
-                if (m3 == '=' || m3 == '!') {
-                  in_lookbehind = true;
-                }
-              }
-            }
-          }
-        } else if (next == '*') {
-          in_verb     = true;
-          verb_parens = 0uz;
-          ++i;
-          continue;
-        }
-
-        if (was_in_lookbehind) {
-          ++lookbehind_inner_depth;  // ルックビハインド内部の括弧
-        }
-        ++depth;
-        continue;
-      }
-
-      if (ch == ')') {
-        if (in_lookbehind) {
-          if (lookbehind_inner_depth > 0uz) {
-            --lookbehind_inner_depth;  // 内側グループの閉じ
-          } else {
-            in_lookbehind = false;  // ルックビハインド自体の閉じ
-          }
-        }
-        if (depth > 0uz) {
-          --depth;
-        }
-        continue;
-      }
-    }
-
-    if (has_var_lookbehind && !has_backref_or_recurse) {
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * @brief NTTP パターンが CTRE を使うべきかを示す constexpr 変数
-   */
-  template <fixed_string Pattern>
-  inline constexpr auto use_ctre_for_pattern_v = ctre_recommended(Pattern.view());
-
-  /**
-   * @brief CTRE の match result を nttp_match_result に変換
-   */
-  template <fixed_string Pattern, bool UseJIT>
-  auto ctre_to_nttp_result(auto const& m) noexcept -> nttp_match_result<Pattern, UseJIT> {
-    nttp_match_result<Pattern, UseJIT> result;
-    result.matched = true;
-    [&]<size_t... Is>(std::index_sequence<Is...>) { ((result.groups[Is] = static_cast<std::string_view>(m.template get<Is>())), ...); }(std::make_index_sequence<nttp_group_count_v<Pattern>>{});
-    return result;
-  }
-
-  /**
-   * @brief CTRE の match result を tuple (find_all 用) に変換
-   */
-  template <typename Match, size_t... Is>
-  auto ctre_to_tuple_impl(Match const& m, std::index_sequence<Is...>) noexcept {
-    return std::make_tuple(static_cast<std::string_view>(m.template get<Is>())...);
-  }
-
-  template <fixed_string Pattern>
-  auto ctre_match_to_tuple(auto const& m) noexcept {
-    return ctre_to_tuple_impl(m, std::make_index_sequence<nttp_group_count_v<Pattern>>{});
-  }
-
-  /**
-   * @brief pcrepp::fixed_string を ctll::fixed_string に変換 (consteval)
-   *
-   * CTRE のテンプレート引数としてパターンを渡すためのブリッジ関数。
-   */
-  template <fixed_string Pattern>
-  consteval auto to_ctre_pattern() {
-    constexpr auto sv = Pattern.view();
-    return ctll::fixed_string<Pattern.length>{ctll::construct_from_pointer, sv.data()};
-  }
-#endif  // WITH_CTRE
-
   /**
    * @brief NTTP コンパイル済み context をキャッシュから取得する（expected 版）
    */
@@ -2478,40 +2207,26 @@ auto get(nttp_match_result<Pattern, UseJIT> const& result) noexcept {
  */
 template <fixed_string Pattern, bool UseJIT = true>
 auto find(std::string_view const target, size_t const start = 0uz, unsigned int const option = 0) -> std::expected<nttp_find_result_t<Pattern, UseJIT>, std::string> {
-#ifdef WITH_CTRE
-  if constexpr (detail::use_ctre_for_pattern_v<Pattern>) {
-    // CTRE パスでは option パラメータは無視される
-    // (このパターンは PCRE2 でコンパイル不可のため PCRE2 へのフォールバック不可)
-    constexpr auto cp = detail::to_ctre_pattern<Pattern>();
-    auto const     sv = target.substr(start);
-    if (auto m = ctre::search<cp>(sv)) {
-      return detail::ctre_to_nttp_result<Pattern, UseJIT>(m);
-    }
-    return nttp_find_result_t<Pattern, UseJIT>{};
-  } else
-#endif
-  {
-    // コンパイルエラーを例外ではなく unexpected として返す
-    auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
-    if (not ctx_res) {
-      return std::unexpected{ctx_res.error()};
-    }
-    auto const* ctx_ptr               = *ctx_res;
-    auto const  runtime_capture_count = static_cast<size_t>(ctx_ptr->capture_count());
-    if (runtime_capture_count != nttp_group_count_v<Pattern> - 1uz) {
-      return std::unexpected{"NTTP find: compile-time capture count " + std::to_string(nttp_group_count_v<Pattern> - 1uz) + " differs from runtime capture count " +
-                             std::to_string(runtime_capture_count)};
-    }
-    auto*      md  = detail::get_tls_match_data(ctx_ptr->get_code());
-    auto const res = ctx_ptr->find(target, md, start, option);
-    if (not res) {
-      return std::unexpected{res.error()};
-    }
-    if (*res <= 0) {
-      return nttp_find_result_t<Pattern, UseJIT>{};
-    }
-    return detail::make_nttp_result_raw<Pattern, UseJIT>(md, target, runtime_capture_count);
+  // コンパイルエラーを例外ではなく unexpected として返す
+  auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+  if (not ctx_res) {
+    return std::unexpected{ctx_res.error()};
   }
+  auto const* ctx_ptr               = *ctx_res;
+  auto const  runtime_capture_count = static_cast<size_t>(ctx_ptr->capture_count());
+  if (runtime_capture_count != nttp_group_count_v<Pattern> - 1uz) {
+    return std::unexpected{"NTTP find: compile-time capture count " + std::to_string(nttp_group_count_v<Pattern> - 1uz) + " differs from runtime capture count " +
+                           std::to_string(runtime_capture_count)};
+  }
+  auto*      md  = detail::get_tls_match_data(ctx_ptr->get_code());
+  auto const res = ctx_ptr->find(target, md, start, option);
+  if (not res) {
+    return std::unexpected{res.error()};
+  }
+  if (*res <= 0) {
+    return nttp_find_result_t<Pattern, UseJIT>{};
+  }
+  return detail::make_nttp_result_raw<Pattern, UseJIT>(md, target, runtime_capture_count);
 }
 
 /**

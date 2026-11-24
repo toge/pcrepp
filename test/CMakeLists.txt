@@ -1,3 +1,7 @@
+if(NOT PCREPP_BUILD_TESTS)
+  return()
+endif()
+
 # WASI ターゲットは wasm を直接実行できないため、wasmtime 経由で実行する。
 # (CMAKE_CROSSCOMPILING_EMULATOR は add_executable より前に設定する必要がある。
 #  wasmtime 自体はテスト実行時に PATH 上にあればよく、configure 時には不要)
@@ -91,3 +95,10 @@ if(WITH_GLAZE)
   target_compile_features(test_glaze PRIVATE cxx_std_23)
   add_test(NAME test_glaze COMMAND test_glaze)
 endif()
+
+add_test(
+  NAME consumer_smoke
+  COMMAND ${CMAKE_COMMAND}
+    -DVCPKG_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/run_consumer_smoke.cmake
+)

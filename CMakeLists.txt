@@ -1,10 +1,30 @@
 cmake_minimum_required(VERSION 3.25)
 project(pcrepp VERSION 0.1.0 LANGUAGES CXX)
 
-option(BUILD_TEST "Enable tests" ON)
-option(BUILD_BENCH "Build benchmarks" OFF)
-option(WITH_CTRE "Enable automatic fallback to CTRE for PCRE2-unfriendly patterns" OFF)
+set(PCREPP_BUILD_TESTS_DEFAULT OFF)
+if(PROJECT_IS_TOP_LEVEL)
+  set(PCREPP_BUILD_TESTS_DEFAULT ON)
+endif()
+
+option(PCREPP_BUILD_TESTS "Build tests" ${PCREPP_BUILD_TESTS_DEFAULT})
+option(PCREPP_BUILD_BENCHMARKS "Build benchmarks" OFF)
+option(WITH_CTRE "Enable CTRE in benchmark target only" OFF)
 option(WITH_GLAZE "Enable Glaze reflection integration (requires glaze)" OFF)
+
+if(PROJECT_IS_TOP_LEVEL)
+  option(BUILD_TEST "Legacy alias of PCREPP_BUILD_TESTS" ${PCREPP_BUILD_TESTS})
+  option(BUILD_BENCH "Legacy alias of PCREPP_BUILD_BENCHMARKS" ${PCREPP_BUILD_BENCHMARKS})
+
+  if(NOT BUILD_TEST STREQUAL PCREPP_BUILD_TESTS)
+    set(PCREPP_BUILD_TESTS ${BUILD_TEST} CACHE BOOL "Build tests" FORCE)
+  endif()
+  if(NOT BUILD_BENCH STREQUAL PCREPP_BUILD_BENCHMARKS)
+    set(PCREPP_BUILD_BENCHMARKS ${BUILD_BENCH} CACHE BOOL "Build benchmarks" FORCE)
+  endif()
+
+  set(BUILD_TEST ${PCREPP_BUILD_TESTS} CACHE BOOL "Legacy alias of PCREPP_BUILD_TESTS" FORCE)
+  set(BUILD_BENCH ${PCREPP_BUILD_BENCHMARKS} CACHE BOOL "Legacy alias of PCREPP_BUILD_BENCHMARKS" FORCE)
+endif()
 
 set(PCREPP_OPTIMIZATION_FLAG_REGEX "(^|[ \t])-O[^ \t]+")
 set(PCREPP_CPU_TUNING_FLAG_REGEX "(^|[ \t])-(march|mcpu|mtune)=[^ \t]+")
@@ -61,10 +81,6 @@ include(CMakePackageConfigHelpers)
 find_package(PCRE2 CONFIG REQUIRED)
 find_package(FastFloat CONFIG REQUIRED)
 
-if(WITH_CTRE)
-  find_package(ctre CONFIG REQUIRED)
-endif()
-
 add_library(pcrepp INTERFACE)
 add_library(pcrepp::pcrepp ALIAS pcrepp)
 
@@ -75,11 +91,6 @@ target_include_directories(pcrepp
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-
-if(WITH_CTRE)
-  target_link_libraries(pcrepp INTERFACE ctre::ctre)
-  target_compile_definitions(pcrepp INTERFACE WITH_CTRE=1)
-endif()
 
 if(WITH_GLAZE)
   find_package(glaze CONFIG REQUIRED)
@@ -97,12 +108,6 @@ install(FILES
 if(WITH_GLAZE)
   install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/pcrepp_glaze.hpp
       DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-endif()
-
-if(WITH_CTRE)
-  set(WITH_CTRE_FIND_DEP "find_dependency(ctre CONFIG)")
-else()
-  set(WITH_CTRE_FIND_DEP "")
 endif()
 
 if(WITH_GLAZE)
@@ -135,11 +140,11 @@ install(EXPORT pcreppTargets
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/pcrepp"
 )
 
-if(BUILD_TEST)
+if(PCREPP_BUILD_TESTS)
     enable_testing()
     add_subdirectory(test)
 endif()
 
-if(BUILD_BENCH)
+if(PCREPP_BUILD_BENCHMARKS)
     add_subdirectory(bench)
 endif()

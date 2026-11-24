@@ -37,6 +37,8 @@ find_package(pcrepp CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE pcrepp::pcrepp)
 ```
 
+`add_subdirectory` / FetchContent 利用時は `PCREPP_BUILD_TESTS=OFF`・`PCREPP_BUILD_BENCHMARKS=OFF` が既定です（トップレベル時のみテスト既定 ON）。必要に応じて明示的に切り替えてください。
+
 ## API リファレンス
 
 ### `pcrepp::context<UseJIT, JITFlags>`

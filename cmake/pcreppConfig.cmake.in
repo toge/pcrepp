@@ -3,7 +3,6 @@
 include(CMakeFindDependencyMacro)
 find_dependency(PCRE2 CONFIG)
 find_dependency(FastFloat CONFIG)
-@WITH_CTRE_FIND_DEP@
 @WITH_GLAZE_FIND_DEP@
 # frozenchars は __has_include で自動検出されるオプション依存 (存在しない場合は無視)
 find_package(frozenchars CONFIG QUIET)

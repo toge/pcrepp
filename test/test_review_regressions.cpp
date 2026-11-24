@@ -766,8 +766,40 @@ TEST_CASE("review: NTTP replacement reference overflow falls back to PCRE2", "[r
         CHECK(fast.error() == normal.error());
       }
     }
+
   };
   verify_size_max();
+}
+
+TEST_CASE("review: lookbehind compilation follows PCRE2 capabilities", "[review][lookbehind]") {
+  SECTION("bounded variable-length lookbehind is accepted") {
+    auto const ctx = pcrepp::context<>::create(R"((?<=colou?r)X)");
+    REQUIRE(ctx);
+
+    auto const runtime_color  = ctx->find("colorX");
+    auto const runtime_colour = ctx->find("colourX");
+    REQUIRE(runtime_color);
+    REQUIRE(runtime_colour);
+    CHECK(static_cast<bool>(*runtime_color));
+    CHECK(static_cast<bool>(*runtime_colour));
+
+    auto const nttp_color  = pcrepp::find<R"((?<=colou?r)X)">("colorX");
+    auto const nttp_colour = pcrepp::find<R"((?<=colou?r)X)">("colourX");
+    REQUIRE(nttp_color);
+    REQUIRE(nttp_colour);
+    CHECK(static_cast<bool>(*nttp_color));
+    CHECK(static_cast<bool>(*nttp_colour));
+  }
+
+  SECTION("unbounded variable-length lookbehind is rejected") {
+    auto const runtime = pcrepp::context<>::create(R"((?<=a+)b)");
+    REQUIRE_FALSE(runtime);
+    CHECK(runtime.error().find("lookbehind") != std::string::npos);
+
+    auto const nttp = pcrepp::find<R"((?<=a+)b)">("aaab");
+    REQUIRE_FALSE(nttp);
+    CHECK(nttp.error().find("lookbehind") != std::string::npos);
+  }
 }
 
 TEST_CASE("review: NTTP fast replacement preserves fallback errors", "[review][nttp_replace][fast]") {

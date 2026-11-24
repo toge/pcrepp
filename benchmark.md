@@ -37,7 +37,7 @@
 
 ```sh
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
-  -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCH=ON
+  -DCMAKE_BUILD_TYPE=Release -DPCREPP_BUILD_BENCHMARKS=ON
 cmake --build build --parallel
 ./build/bench/bench_main
 ```

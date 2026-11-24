@@ -6,7 +6,7 @@
 
 - ライブラリ本体: `include/pcrepp.hpp` (約 2300 行、Doxygen 日本語コメント)
 - 公開 CMake ターゲット: `pcrepp::pcrepp` (INTERFACE ライブラリ)
-- 依存: `PCRE2::8BIT`, `FastFloat::fast_float` (必須)、`frozenchars::frozenchars` (任意、NTTP 連携のため)、`ctre` (任意、`WITH_CTRE=ON` 時に必要)
+- 依存: `PCRE2::8BIT`, `FastFloat::fast_float` (必須)、`frozenchars::frozenchars` (任意、NTTP 連携のため)。`ctre` は **ベンチマーク時のみ任意** (`WITH_CTRE=ON` かつ `PCREPP_BUILD_BENCHMARKS=ON`)。
 - ランタイム PCRE2 シンボル定義: `PCRE2_CODE_UNIT_WIDTH 8`
 
 ## 主要 API
@@ -16,7 +16,7 @@
 - NTTP 版: `pcrepp::find<"...">`, `pcrepp::find_all<"...">(target, option, start)`, `pcrepp::match<"...">(target)` (完全一致), `pcrepp::replace<"...">(target, replacement[, option])` / `replace<"...">(target, callback)`, `pcrepp::split<"...">`, `pcrepp::split_view<"...">` (要 `<generator>`), `pcrepp::compile<"...">()`, `R"(...)"_re` リテラル。戻り値は tuple-like で構造化束縛可。`replace` / `replace_unchecked` フリー関数はパターンを `get_nttp_context` キャッシュに委譲する (nttp_regex::replace と同じ経路)。パターン情報クエリ (`capture_count` 等) は `pcrepp::compile_utf<Pattern>()` で取得した context 経由で利用する。
 - NTTP 高速 replace: `pcrepp::replace<Pattern, Replacement>(target)` / `pcrepp::replace_unchecked<Pattern, Replacement>(target)` (両方をテンプレート引数に取る 2 引数版)。置換文字列を constexpr トークン化 (`detail::for_each_nttp_repl_token` / `detail::nttp_repl_scan`) して pcre2_substitute を介さず ovector 直接 emit するため約 -40% 高速。対応構文は `$$` / `$n` / `${n}` / `${name}` / `$name` のみ。対応外構文・範囲外参照・未知名前は既存ランタイム経路へ自動フォールバックし PCRE2 と同一のエラー挙動を維持する。未マッチグループ参照は PCRE2 デフォルト同様エラー (`PCRE2_SUBSTITUTE_UNSET_EMPTY` 非対応)。テストは `[nttp_replace][fast]` タグ。
 - 内部: `pcrepp::detail::count_capture_groups` (constexpr)、`pcrepp::detail::tls_match_data_cache` (TLS バッファ再利用)。
-- CTRE フォールバック: `WITH_CTRE=ON` で有効化。現在は可変長 lookbehind のみ CTRE に委譲（ネスト量化子の委譲は 2026-07 のベンチマーク結果により削除。PCRE2 の auto-possessify 最適化の方が高速のため）。後方参照・再帰を含むパターンは強制的に PCRE2 を使用。
+- CTRE 連携: 公開ライブラリ本体には含めず、`bench/` のベンチマーク比較用途に限定。`WITH_CTRE=ON` 時のみ `bench_main` に `WITH_CTRE=1` を付与して `ctre::ctre` をリンクする。
 
 ## ビルド
 
@@ -31,8 +31,8 @@
 ./build_mingw.sh          # MinGW64
 ./build_win64.sh          # Windows 64bit (mingw64-cmake)
 
-# CTRE フォールバック付き
-cmake -B build_ctre -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DWITH_CTRE=ON
+# CTRE 比較ベンチ付き
+cmake -B build_ctre -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DPCREPP_BUILD_BENCHMARKS=ON -DWITH_CTRE=ON
 cmake --build build_ctre --parallel
 ```
 
@@ -96,20 +96,19 @@ NTTP 関連を触った場合は `count_capture_groups` 系の `static_assert` �
 cmake --build build --target smoke_wasi_minimal && ./build/test/smoke_wasi_minimal
 ```
 
-CTRE フォールバックを触った場合:
+CTRE ベンチ比較経路を触った場合:
 ```sh
-cmake -B build_ctre -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DWITH_CTRE=ON
+cmake -B build_ctre -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DPCREPP_BUILD_BENCHMARKS=ON -DWITH_CTRE=ON
 cmake --build build_ctre --parallel && cd build_ctre && ctest --output-on-failure
 cd ..
 ```
-`ctre_recommended` の constexpr 解析は `[capture_count]` と同様に静的アサートでテストされているため、変更時はコンパイルが通れば正常。
 
 ## ベンチマーク
 
 `bench/` ディレクトリに Google Benchmark を使用したパフォーマンス計測があります。
 
 ```sh
-cmake -B build -DBUILD_BENCH=ON [-DWITH_CTRE=ON] ...
+cmake -B build -DPCREPP_BUILD_BENCHMARKS=ON [-DWITH_CTRE=ON] ...
 cmake --build build --parallel
 ./build/bench/bench_main                                           # 全ベンチマーク
 ./build/bench/bench_main --benchmark_filter="BM_NttpFind|BM_Jit"   # 絞り込み
@@ -121,4 +120,4 @@ cmake --build build --parallel
 - `BM_NttpFindAll_*` / `BM_JitFindAll_*` / `BM_NoJitFindAll_*` — find_all 比較
 - `BM_Adversarial_*` — `(a|aa|aaa)+[b-z]` の敵対的パターン（`WITH_CTRE=ON` 時は `BM_DirectCtre_*` で CTRE 直接呼び出しも計測）
 
-`bench_compare.cpp` は CTRE 委譲の要否を判断するためのデータを生成する。新しい委譲条件を追加する際は、このファイルにベンチマークを追加し PCRE2-only と CTRE 有効の両方で比較すること。
+`bench_compare.cpp` は PCRE2 と CTRE の比較データを生成する。公開 API 側への自動委譲は行わないため、比較はベンチマークターゲット内で完結させること。
