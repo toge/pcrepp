@@ -496,6 +496,7 @@ namespace detail {
           br_parens  = 0uz;
         } else {
           // br_stack が満杯: オーバーフロー追跡を開始（br_stack を壊さない）
+          count_overflow = true;
           ++br_overflow_depth;
         }
         i += 2uz;  // ?| をスキップ
