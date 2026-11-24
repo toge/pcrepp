@@ -140,8 +140,8 @@ auto extract_as(match_result const& mr) -> std::expected<T, std::string> {
  * @tparam Opts glaze のオプション
  * @tparam UseJIT JIT コンパイルを使用するか
  */
-template <glz::glaze_object_t T, glz::opts Opts = glz::opts{}, bool UseJIT = true>
-auto find_as(context<UseJIT> const& ctx, std::string_view target,
+template <glz::glaze_object_t T, glz::opts Opts = glz::opts{}, bool UseJIT = true, unsigned JITFlags = PCRE2_JIT_COMPLETE>
+auto find_as(context<UseJIT, JITFlags> const& ctx, std::string_view target,
              size_t start = 0uz, unsigned int option = 0) -> std::expected<T, std::string> {
   auto mr = ctx.find(target, start, option);
   if (not mr) {
@@ -162,14 +162,14 @@ auto find_as(context<UseJIT> const& ctx, std::string_view target,
  * @tparam UseJIT JIT コンパイルを使用するか
  */
 template <fixed_string Pattern, glz::glaze_object_t T,
-          glz::opts Opts = glz::opts{}, bool UseJIT = true>
+          glz::opts Opts = glz::opts{}, bool UseJIT = true, unsigned JITFlags = PCRE2_JIT_COMPLETE>
 auto find_as(std::string_view target, size_t start = 0uz, unsigned int option = 0)
   -> std::expected<T, std::string> {
-  auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+  static auto const ctx_res = context<UseJIT, JITFlags>::create(Pattern.view(), detail::auto_utf_options(Pattern.view()));
   if (not ctx_res) {
     return std::unexpected{ctx_res.error()};
   }
-  return find_as<T, Opts>(**ctx_res, target, start, option);
+  return find_as<T, Opts, UseJIT, JITFlags>(*ctx_res, target, start, option);
 }
 
 /**
@@ -183,22 +183,26 @@ auto find_as(std::string_view target, size_t start = 0uz, unsigned int option = 
  * @tparam UseJIT JIT コンパイルを使用するか
  */
 template <fixed_string Pattern, glz::glaze_object_t T,
-          glz::opts Opts = glz::opts{}, bool UseJIT = true>
+          glz::opts Opts = glz::opts{}, bool UseJIT = true, unsigned JITFlags = PCRE2_JIT_COMPLETE>
 auto find_all_as(std::string_view target, unsigned int option = 0)
   -> std::expected<std::vector<T>, std::string> {
-  auto ctx_res = detail::try_get_nttp_context<Pattern, UseJIT>();
+  static auto const ctx_res = context<UseJIT, JITFlags>::create(Pattern.view(), detail::auto_utf_options(Pattern.view()));
   if (not ctx_res) {
     return std::unexpected{ctx_res.error()};
   }
-  auto const* ctx_ptr = *ctx_res;
+  auto const* ctx_ptr = &(*ctx_res);
 
   std::vector<T> results;
-  for (auto const& mr : ctx_ptr->find_all(target, option)) {
+  auto range = ctx_ptr->find_all(target, option);
+  for (auto const& mr : range) {
     auto r = extract_as<T, Opts>(mr);
     if (not r) {
       return std::unexpected{r.error()};
     }
     results.push_back(std::move(*r));
+  }
+  if (not range) {
+    return std::unexpected{std::string{range.error()}};
   }
   return results;
 }

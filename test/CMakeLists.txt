@@ -1,3 +1,7 @@
+if(NOT PCREPP_BUILD_TESTS)
+  return()
+endif()
+
 # WASI ターゲットは wasm を直接実行できないため、wasmtime 経由で実行する。
 # (CMAKE_CROSSCOMPILING_EMULATOR は add_executable より前に設定する必要がある。
 #  wasmtime 自体はテスト実行時に PATH 上にあればよく、configure 時には不要)
@@ -90,4 +94,16 @@ if(WITH_GLAZE)
   target_include_directories(test_glaze PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_features(test_glaze PRIVATE cxx_std_23)
   add_test(NAME test_glaze COMMAND test_glaze)
+endif()
+
+# consumer_smoke は CMake configure+build+install を複数回実行するため重い (1 回あたり数分)。
+# 既定では無効とし、CI (linux-gcc ジョブ) と明示的に有効化した環境でのみ実行する。
+option(PCREPP_ENABLE_CONSUMER_SMOKE "Run the slow consumer subproject/install smoke test in CTest" OFF)
+if(PCREPP_ENABLE_CONSUMER_SMOKE)
+  add_test(
+    NAME consumer_smoke
+    COMMAND ${CMAKE_COMMAND}
+      -DVCPKG_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/run_consumer_smoke.cmake
+  )
 endif()

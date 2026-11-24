@@ -252,6 +252,24 @@ TEST_CASE("Glaze integration: NTTP find_all_as", "[glaze][nttp]") {
     REQUIRE(people.has_value());
     CHECK(people->empty());
   }
+
+  SECTION("find_all_as returns unexpected on late match limit error") {
+    using strict_ctx = pcrepp::context<false, PCRE2_JIT_COMPLETE | PCRE2_JIT_PARTIAL_SOFT>;
+    auto ctx_res = strict_ctx::create(R"(z|(?<name>x+) age (?<age>\d+))");
+    REQUIRE(ctx_res.has_value());
+    auto& ctx = *ctx_res;
+    ctx.set_match_limit(10u);
+
+    auto const input  = "z " + std::string(24uz, 'x');
+    auto const direct = pcrepp::find_as<Partial>(ctx, input);
+    REQUIRE(direct.has_value());
+    CHECK(direct->name.empty());
+    CHECK(direct->age == 0);
+
+    auto people = pcrepp::find_all_as<R"((*LIMIT_MATCH=10)z|(?<name>(x+x+)+)y)", Partial, glz::opts{}, false>(input);
+    REQUIRE_FALSE(people.has_value());
+    CHECK(people.error().find("code " + std::to_string(PCRE2_ERROR_MATCHLIMIT)) != std::string_view::npos);
+  }
 }
 
 TEST_CASE("Glaze integration: error handling with NTTP", "[glaze][nttp]") {

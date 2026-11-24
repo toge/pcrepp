@@ -37,6 +37,8 @@ find_package(pcrepp CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE pcrepp::pcrepp)
 ```
 
+`add_subdirectory` / FetchContent 利用時は `PCREPP_BUILD_TESTS=OFF`・`PCREPP_BUILD_BENCHMARKS=OFF` が既定です（トップレベル時のみテスト既定 ON）。必要に応じて明示的に切り替えてください。
+
 ## API リファレンス
 
 ### `pcrepp::context<UseJIT, JITFlags>`
@@ -50,8 +52,8 @@ target_link_libraries(your_target PRIVATE pcrepp::pcrepp)
 - **`replace(target, replacement, option)`**: 文字列による全置換を行います。
 - **`replace(target, callback)`**: ラムダ式を用いた動的置換を行います。
 - **`find_all(target, option, start)`**: すべてのマッチを巡回するための Range を返します。
-- **`split(target, option)`**: 正規表現を区切り文字として文字列を分割します。
-- **`split_view(target, option)`**: `std::generator` による lazy 分割を返します（C++23）。
+- **`split(target, option)`**: `std::expected<std::vector<std::string_view>, std::string>` を返す分割 API です。
+- **`split_view(target, option)`**: `std::generator<std::expected<std::string_view, std::string>>` を返す lazy 分割 API です（C++23）。
 - **`capture_count()` / `named_captures()` / `pattern_size()` / `jit_size()` / `options()`**: パターン情報を取得します。
 - **`set_match_limit()` / `set_depth_limit()` / `set_heap_limit()` / `set_offset_limit()`**: PCRE2 の match context 制限を設定します。
 
@@ -108,7 +110,7 @@ for (auto const& [whole, key, value] : all) {
 - **`re.find_all(target, option)`**
 - **`re.match(target, option)`** (`std::expected<bool, std::string>`)
 - **`re.replace(target, replacement, option)`** / **`re.replace(target, callback)`**
-- **`re.split(target, option)`**
+- **`re.split(target, option)`** (`std::expected<std::vector<std::string_view>, std::string>`)
 - 置換オプションには PCRE2 定数を直接使用（`PCRE2_SUBSTITUTE_GLOBAL`, `PCRE2_SUBSTITUTE_EXTENDED` など）
 #### 利点
 

@@ -79,10 +79,12 @@ TEST_CASE("Basic usage from user example", "[basic]") {
         auto const target = "apple, banana, cherry"sv;
         auto parts = ctx.split(target);
 
-        REQUIRE(parts.size() == 3);
-        CHECK(parts[0] == "apple");
-        CHECK(parts[1] == "banana");
-        CHECK(parts[2] == "cherry");
+        REQUIRE(parts.has_value());
+        auto const& split_parts = *parts;
+        REQUIRE(split_parts.size() == 3);
+        CHECK(split_parts[0] == "apple");
+        CHECK(split_parts[1] == "banana");
+        CHECK(split_parts[2] == "cherry");
     }
 
     SECTION("Formatter") {

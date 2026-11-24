@@ -131,10 +131,11 @@ TEST_CASE("context<false> replace works", "[nojit]") {
 TEST_CASE("context<false> split works", "[nojit]") {
   auto const ctx = pcrepp::context<false>::create(R"(, )").value();
   auto const parts = ctx.split("a, b, c");
-  REQUIRE(parts.size() == 3uz);
-  CHECK(parts[0uz] == "a");
-  CHECK(parts[1uz] == "b");
-  CHECK(parts[2uz] == "c");
+  REQUIRE(parts.has_value());
+  REQUIRE(parts->size() == 3uz);
+  CHECK((*parts)[0uz] == "a");
+  CHECK((*parts)[1uz] == "b");
+  CHECK((*parts)[2uz] == "c");
 }
 
 TEST_CASE("context<false> match works", "[nojit][match]") {
@@ -240,26 +241,29 @@ TEST_CASE("replace callback with zero-width lookahead", "[replace][zero_width]")
 TEST_CASE("split with no match returns single element", "[split]") {
   auto const ctx = pcrepp::context<true>::create(R"(,)").value();
   auto const parts = ctx.split("abc");
-  REQUIRE(parts.size() == 1uz);
-  CHECK(parts[0uz] == "abc");
+  REQUIRE(parts.has_value());
+  REQUIRE(parts->size() == 1uz);
+  CHECK((*parts)[0uz] == "abc");
 }
 
 TEST_CASE("split with zero-width delimiter", "[split][zero_width]") {
   auto const ctx = pcrepp::context<true>::create(R"((?=[bc]))").value();
   auto const parts = ctx.split("abcd");
-  REQUIRE(parts.size() == 3uz);
-  CHECK(parts[0uz] == "a");
-  CHECK(parts[1uz] == "b");
-  CHECK(parts[2uz] == "cd");
+  REQUIRE(parts.has_value());
+  REQUIRE(parts->size() == 3uz);
+  CHECK((*parts)[0uz] == "a");
+  CHECK((*parts)[1uz] == "b");
+  CHECK((*parts)[2uz] == "cd");
 }
 
 TEST_CASE("split with consecutive delimiters", "[split]") {
   auto const ctx = pcrepp::context<true>::create(R"(,)").value();
   auto const parts = ctx.split("a,,b");
-  REQUIRE(parts.size() == 3uz);
-  CHECK(parts[0uz] == "a");
-  CHECK(parts[1uz] == "");
-  CHECK(parts[2uz] == "b");
+  REQUIRE(parts.has_value());
+  REQUIRE(parts->size() == 3uz);
+  CHECK((*parts)[0uz] == "a");
+  CHECK((*parts)[1uz] == "");
+  CHECK((*parts)[2uz] == "b");
 }
 
 // ========================================
@@ -341,18 +345,20 @@ TEST_CASE("find_all with start offset 0 finds all", "[find_all][f1]") {
 TEST_CASE("split with PCRE2_CASELESS option", "[split][f2]") {
   auto const ctx = pcrepp::context<true>::create(R"(AND)").value();
   auto const parts = ctx.split("apple AND banana", PCRE2_CASELESS);
-  REQUIRE(parts.size() == 2uz);
-  CHECK(parts[0] == "apple ");
-  CHECK(parts[1] == " banana");
+  REQUIRE(parts.has_value());
+  REQUIRE(parts->size() == 2uz);
+  CHECK((*parts)[0] == "apple ");
+  CHECK((*parts)[1] == " banana");
 }
 
 TEST_CASE("split with option default 0 works as before", "[split][f2]") {
   auto const ctx = pcrepp::context<true>::create(R"(,)").value();
   auto const parts = ctx.split("a,b,c");
-  REQUIRE(parts.size() == 3uz);
-  CHECK(parts[0] == "a");
-  CHECK(parts[1] == "b");
-  CHECK(parts[2] == "c");
+  REQUIRE(parts.has_value());
+  REQUIRE(parts->size() == 3uz);
+  CHECK((*parts)[0] == "a");
+  CHECK((*parts)[1] == "b");
+  CHECK((*parts)[2] == "c");
 }
 
 // ========================================
@@ -584,6 +590,7 @@ TEST_CASE("match_result size direct assert", "[match_result][h18]") {
 TEST_CASE("split with empty target", "[split][h20]") {
   auto const ctx = pcrepp::context<>::create(R"(,)").value();
   auto const parts = ctx.split("");
-  REQUIRE(parts.size() == 1uz);
-  CHECK(parts[0uz].empty());
+  REQUIRE(parts.has_value());
+  REQUIRE(parts->size() == 1uz);
+  CHECK((*parts)[0uz].empty());
 }

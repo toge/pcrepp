@@ -1,14 +1,14 @@
 /**
  * @file bench_compare.cpp
- * @brief CTRE delegation vs PCRE2 raw performance comparison
+ * @brief Direct CTRE benchmark vs PCRE2 raw performance comparison
  *
  * Compares three execution paths for the same patterns:
- *   1. pcrepp::find<Pattern>()        — NTTP, may delegate to CTRE
+ *   1. pcrepp::find<Pattern>()        — NTTP, PCRE2 only
  *   2. pcrepp::context<true>::find()  — runtime PCRE2 with JIT
  *   3. pcrepp::context<false>::find() — runtime PCRE2 without JIT
  *
  * Build:
- *   cmake -B build -DBUILD_BENCH=ON ...
+ *   cmake -B build -DPCREPP_BUILD_BENCHMARKS=ON ...
  *   cmake --build build --parallel
  *   ./build/bench/bench_main --benchmark_filter="BM_NttpFind|BM_JitFind|..."
  *
@@ -210,7 +210,7 @@ DEFINE_JIT_FINDALL_BENCH(Digits, R"(\d+)")
 DEFINE_NoJitFindAll_BENCH(Digits, R"(\d+)")
 
 // ===================================================================
-//  パターン 3: ネスト量化子 ((\w+\s+)+) — CTRE 推奨 (PCRE2 が苦手)
+//  パターン 3: ネスト量化子 ((\w+\s+)+) — 比較用 CTRE 候補
 //  グループ数: 1 → tuple = [whole, g1]
 //  両エンジンともコンパイル可能 → CTRE vs PCRE2 の速度比較が可能
 // ===================================================================
@@ -225,12 +225,12 @@ DEFINE_NoJitFindAll_BENCH(NestedQuant, R"((\w+\s+)+)")
 // ===================================================================
 //  パターン 4: (省略) 可変長 lookbehind は CTRE v3.11.0 + GCC 16
 //  でコンパイルエラーになるためテストをスキップする。
-//  理論上は CTRE 推奨だが、現実的にはネスト量化子が主な受益者。
+//  過去のデータではネスト量化子が比較対象として主な候補だった。
 // ===================================================================
 
 // ===================================================================
 //  パターン 5: 後方参照 — PCRE2 強制 (CTRE 非対応)
-//  CTRE フォールバックが ON でも PCRE2 を使う。
+//  ベンチマークで WITH_CTRE が ON でも、公開 find API は PCRE2 を使う。
 //  グループ数: 1 → tuple = [whole, g1]
 // ===================================================================
 DEFINE_NTTP_FIND_BENCH(Backref, R"((\w+)\s+\1)")
@@ -344,7 +344,7 @@ static void BM_Quick_JitMatch(benchmark::State& state) {
 BENCHMARK(BM_Quick_JitMatch);
 
 // ===================================================================
-//  直接 CTRE (CTRE フォールバック有効時のみ)
+//  直接 CTRE (ベンチマーク専用の WITH_CTRE=ON 時のみ)
 // ===================================================================
 #ifdef WITH_CTRE
 static void BM_DirectCtre_AdvMatch(benchmark::State& state) {

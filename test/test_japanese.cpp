@@ -58,10 +58,11 @@ TEST_CASE("Runtime context split with Japanese delimiter", "[japanese]") {
 
   auto const target = "東京、大阪、名古屋"sv;
   auto parts = ctx.split(target);
-  REQUIRE(parts.size() == 3);
-  CHECK(parts[0] == "東京");
-  CHECK(parts[1] == "大阪");
-  CHECK(parts[2] == "名古屋");
+  REQUIRE(parts.has_value());
+  REQUIRE(parts->size() == 3);
+  CHECK((*parts)[0] == "東京");
+  CHECK((*parts)[1] == "大阪");
+  CHECK((*parts)[2] == "名古屋");
 }
 
 TEST_CASE("Runtime context named capture in Japanese text", "[japanese]") {
