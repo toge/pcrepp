@@ -55,6 +55,8 @@ TEST_CASE("Zero-width matches", "[zero_width]") {
 
         auto const target = "abc"sv;
         auto parts = ctx.split(target);
+        REQUIRE(parts.has_value());
+        auto const& split_parts = *parts;
 
         // Expected behavior for zero-width split:
         // Match at 0: ""
@@ -62,12 +64,12 @@ TEST_CASE("Zero-width matches", "[zero_width]") {
         // Match at 2: "b"
         // Match at 3: "c"
         // After loop: ""
-        REQUIRE(parts.size() == 5);
-        CHECK(parts[0] == "");
-        CHECK(parts[1] == "a");
-        CHECK(parts[2] == "b");
-        CHECK(parts[3] == "c");
-        CHECK(parts[4] == "");
+        REQUIRE(split_parts.size() == 5);
+        CHECK(split_parts[0] == "");
+        CHECK(split_parts[1] == "a");
+        CHECK(split_parts[2] == "b");
+        CHECK(split_parts[3] == "c");
+        CHECK(split_parts[4] == "");
     }
 
     SECTION("zero-length capture groups") {
@@ -123,10 +125,12 @@ TEST_CASE("Zero-width matches", "[zero_width]") {
 
         auto const target = "a,b"sv;
         auto parts = ctx.split(target);
+        REQUIRE(parts.has_value());
+        auto const& split_parts = *parts;
 
-        REQUIRE(parts.size() == 2);
-        CHECK(parts[0] == "a");
-        CHECK(parts[1] == "b");
+        REQUIRE(split_parts.size() == 2);
+        CHECK(split_parts[0] == "a");
+        CHECK(split_parts[1] == "b");
     }
 
     SECTION("lookahead finds no duplicate zero-width matches at non-start positions") {

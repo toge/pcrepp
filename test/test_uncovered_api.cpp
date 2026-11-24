@@ -12,8 +12,9 @@ TEST_CASE("split_view yields same tokens as split", "[split_view]") {
   auto const target = "apple, banana, cherry"sv;
 
   auto tokens = std::vector<std::string_view>{};
-  for (auto const token : ctx.split_view(target)) {
-    tokens.push_back(token);
+  for (auto const& token : ctx.split_view(target)) {
+    REQUIRE(token.has_value());
+    tokens.push_back(*token);
   }
   REQUIRE(tokens.size() == 3);
   CHECK(tokens[0] == "apple");
@@ -25,8 +26,9 @@ TEST_CASE("split_view with no delimiter yields whole target", "[split_view]") {
   using namespace std::string_view_literals;
   auto const ctx    = pcrepp::context<>::create(",").value();
   auto       tokens = std::vector<std::string_view>{};
-  for (auto const token : ctx.split_view("solo"sv)) {
-    tokens.push_back(token);
+  for (auto const& token : ctx.split_view("solo"sv)) {
+    REQUIRE(token.has_value());
+    tokens.push_back(*token);
   }
   REQUIRE(tokens.size() == 1);
   CHECK(tokens[0] == "solo");
@@ -36,8 +38,9 @@ TEST_CASE("split_view keeps empty tokens between adjacent delimiters", "[split_v
   using namespace std::string_view_literals;
   auto const ctx    = pcrepp::context<>::create(",").value();
   auto       tokens = std::vector<std::string_view>{};
-  for (auto const token : ctx.split_view("a,,b,"sv)) {
-    tokens.push_back(token);
+  for (auto const& token : ctx.split_view("a,,b,"sv)) {
+    REQUIRE(token.has_value());
+    tokens.push_back(*token);
   }
   REQUIRE(tokens.size() == 4);
   CHECK(tokens[0] == "a");

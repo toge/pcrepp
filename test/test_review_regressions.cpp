@@ -1,6 +1,7 @@
 #include "pcrepp.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <expected>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -612,6 +613,43 @@ TEST_CASE("review: copied and moved ranges receive later iteration errors", "[it
   verify_later_error(copy_assigned);
   verify_later_error(move_assigned);
   verify_later_error(self_moved);
+}
+
+TEST_CASE("review: split surfaces late and initial iteration errors", "[split][iteration][error]") {
+  SECTION("late match limit error") {
+    auto ctx = pcrepp::context<>::create(R"(z|(x+x+)+y)").value();
+    ctx.set_match_limit(10u);
+    auto const input = "z " + std::string(24uz, 'x');
+
+    auto split_result = ctx.split(input);
+    REQUIRE_FALSE(split_result.has_value());
+    CHECK(split_result.error().find("code " + std::to_string(PCRE2_ERROR_MATCHLIMIT)) != std::string_view::npos);
+
+#if PCREPP_HAS_GENERATOR
+    auto seen = std::vector<std::expected<std::string_view, std::string>>{};
+    for (auto const& token : ctx.split_view(input)) {
+      seen.push_back(token);
+    }
+    REQUIRE(seen.size() >= 2uz);
+    CHECK(seen[0].has_value());
+    CHECK(*seen[0] == "");
+    CHECK_FALSE(seen.back().has_value());
+    CHECK(seen.back().error().find("code " + std::to_string(PCRE2_ERROR_MATCHLIMIT)) != std::string_view::npos);
+#endif
+  }
+
+#if PCREPP_HAS_GENERATOR
+  SECTION("initial UTF error yields terminal unexpected") {
+    auto const ctx   = pcrepp::context<>::create(R"(.)", PCRE2_UTF).value();
+    auto const input = std::string_view{"\xff", 1uz};
+    auto       seen  = std::vector<std::expected<std::string_view, std::string>>{};
+    for (auto const& token : ctx.split_view(input)) {
+      seen.push_back(token);
+    }
+    REQUIRE(seen.size() == 1uz);
+    CHECK_FALSE(seen[0].has_value());
+  }
+#endif
 }
 
 TEST_CASE("review: custom JIT flags propagate through find_all range", "[review][jitflags]") {

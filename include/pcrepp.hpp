@@ -1839,14 +1839,18 @@ struct context {
    *
    * @param target 分割対象の文字列
    * @param option 検索オプション (PCRE2_CASELESS 等)
-   * @return std::vector<std::string_view> 分割された文字列。区切りがなければ target 全体が 1 要素
+   * @return std::expected<std::vector<std::string_view>, std::string> 分割結果。区切りがなければ target 全体が 1 要素
    */
-  auto split(std::string_view const target, unsigned int const option = 0) const -> std::vector<std::string_view> {
+  auto split(std::string_view const target, unsigned int const option = 0) const -> std::expected<std::vector<std::string_view>, std::string> {
     auto res  = std::vector<std::string_view>{};
     auto last = 0uz;
-    for (auto& mr : find_all(target, option)) {
+    auto range = find_all(target, option);
+    for (auto& mr : range) {
       res.push_back(target.substr(last, mr.start_pos() - last));
       last = mr.end_pos();
+    }
+    if (not range) {
+      return std::unexpected{std::string{range.error()}};
     }
     res.push_back(target.substr(last));
     return res;
@@ -1872,13 +1876,18 @@ struct context {
    * @param target 分割対象の文字列
    * @param option 検索オプション
    */
-  auto split_view(std::string_view const target, unsigned int const option = 0) const -> std::generator<std::string_view> {
+  auto split_view(std::string_view const target, unsigned int const option = 0) const -> std::generator<std::expected<std::string_view, std::string>> {
     auto last = 0uz;
-    for (auto& mr : find_all(target, option)) {
-      co_yield target.substr(last, mr.start_pos() - last);
+    auto range = find_all(target, option);
+    for (auto& mr : range) {
+      co_yield std::expected<std::string_view, std::string>{target.substr(last, mr.start_pos() - last)};
       last = mr.end_pos();
     }
-    co_yield target.substr(last);
+    if (not range) {
+      co_yield std::unexpected{std::string{range.error()}};
+      co_return;
+    }
+    co_yield std::expected<std::string_view, std::string>{target.substr(last)};
   }
 #endif
 };
@@ -2776,12 +2785,13 @@ auto split(std::string_view const target, unsigned int const option = 0) -> std:
  *
  * `context::split_view(target, option)` の NTTP 版。vector を確保せず、
  * 大量分割時に省メモリ。
- * コンパイル失敗時は空の generator を返す（ランタイム例外なし）。
+ * コンパイル失敗時は `unexpected` を 1 要素だけ返す（ランタイム例外なし）。
  */
 template <fixed_string Pattern, bool UseJIT = true>
-auto split_view(std::string_view const target, unsigned int const option = 0) -> std::generator<std::string_view> {
+auto split_view(std::string_view const target, unsigned int const option = 0) -> std::generator<std::expected<std::string_view, std::string>> {
   auto ctx_res = detail::get_nttp_context<Pattern, UseJIT>();
   if (not ctx_res) {
+    co_yield std::unexpected{ctx_res.error()};
     co_return;
   }
   for (auto&& part : (*ctx_res)->split_view(target, option)) {
@@ -2885,11 +2895,12 @@ struct nttp_regex {
    * @brief 文字列分割の lazy view 版（context::split_view に委譲）
    * @param target 分割対象の文字列
    * @param option マッチオプション
-   * @return std::generator<std::string_view> 分割結果。コンパイル失敗時は空
+   * @return std::generator<std::expected<std::string_view, std::string>> 分割結果。コンパイル失敗時は unexpected を 1 要素返す
    */
-  auto split_view(std::string_view const target, unsigned int const option = 0) const -> std::generator<std::string_view> {
+  auto split_view(std::string_view const target, unsigned int const option = 0) const -> std::generator<std::expected<std::string_view, std::string>> {
     auto ctx_res = detail::get_nttp_context<Pattern, UseJIT>();
     if (not ctx_res) {
+      co_yield std::unexpected{ctx_res.error()};
       co_return;
     }
     co_yield std::ranges::elements_of((*ctx_res)->split_view(target, option));

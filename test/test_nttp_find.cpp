@@ -317,7 +317,8 @@ TEST_CASE("NTTP split_view lazy iteration", "[nttp_split]") {
   auto             count = 0uz;
   std::string_view last;
   for (auto part : pcrepp::split_view<R"(\s+)">("x y z")) {
-    last = part;
+    REQUIRE(part.has_value());
+    last = *part;
     ++count;
   }
   CHECK(count == 3uz);
@@ -326,6 +327,7 @@ TEST_CASE("NTTP split_view lazy iteration", "[nttp_split]") {
   auto const re = pcrepp::compile<R"(-)">();
   count         = 0uz;
   for ([[maybe_unused]] auto part : re.split_view("1-2-3")) {
+    REQUIRE(part.has_value());
     ++count;
   }
   CHECK(count == 3uz);

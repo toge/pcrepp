@@ -52,7 +52,7 @@ int main() {
   fails += check(static_cast<bool>(rep) && *rep == "abc [123] def", "replace");
 
   auto parts = ctx.split("a1b22c");
-  fails += check(not parts.empty(), "split");
+  fails += check(static_cast<bool>(parts) && not parts->empty(), "split");
 
   auto full = ctx.match("123-xyz");
   fails += check(static_cast<bool>(full) && *full, "match");
