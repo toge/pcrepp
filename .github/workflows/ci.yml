@@ -54,7 +54,8 @@ jobs:
       - name: Configure
         run: |
           cmake -B build -S . -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake
+            -DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DPCREPP_ENABLE_CONSUMER_SMOKE=ON
 
       - name: Build
         run: cmake --build build

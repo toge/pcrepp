@@ -88,6 +88,12 @@ cd build && ctest --output-on-failure
 ./build/test/all_test --list-tests >/dev/null   # バイナリ健全性
 ```
 
+コンシューマ (サブプロジェクト / インストール) スモークテスト `consumer_smoke` は configure+build+install を複数回実行するため重く、既定では CTest に登録されない (CI の linux-gcc ジョブのみ実行)。手動で実行する場合:
+
+```sh
+cmake -B build -DPCREPP_ENABLE_CONSUMER_SMOKE=ON -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake && cd build && ctest -R consumer_smoke --output-on-failure
+```
+
 NTTP 関連を触った場合は `count_capture_groups` 系の `static_assert` を含む `[capture_count]` テストと `[nttp_find]` を必ず通す。TLS/スレッド周りを触った場合は `[tls][stress]` テスト (5000 回イテレーション) を通す。
 
 例外送出 (`throw`/`try`/`catch`) に触った場合、または `try_get_nttp_context` 周りを変更した場合は、例外なしビルドも確認する。

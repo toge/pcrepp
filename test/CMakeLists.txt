@@ -96,9 +96,14 @@ if(WITH_GLAZE)
   add_test(NAME test_glaze COMMAND test_glaze)
 endif()
 
-add_test(
-  NAME consumer_smoke
-  COMMAND ${CMAKE_COMMAND}
-    -DVCPKG_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
-    -P ${CMAKE_CURRENT_SOURCE_DIR}/run_consumer_smoke.cmake
-)
+# consumer_smoke は CMake configure+build+install を複数回実行するため重い (1 回あたり数分)。
+# 既定では無効とし、CI (linux-gcc ジョブ) と明示的に有効化した環境でのみ実行する。
+option(PCREPP_ENABLE_CONSUMER_SMOKE "Run the slow consumer subproject/install smoke test in CTest" OFF)
+if(PCREPP_ENABLE_CONSUMER_SMOKE)
+  add_test(
+    NAME consumer_smoke
+    COMMAND ${CMAKE_COMMAND}
+      -DVCPKG_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/run_consumer_smoke.cmake
+  )
+endif()
